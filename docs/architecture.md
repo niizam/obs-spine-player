@@ -20,6 +20,7 @@ This boundary keeps OBS-specific lifetime and audio threading out of the player,
 - `data/player/version-detector.js` reads the version from Spine binary/JSON headers and selects only the bundled 4.0 or 4.1 family.
 - `data/player/state-controller.js` owns animation semantics independently of DOM/loading code.
 - `data/player/player.js` loads assets, creates/disposes the matching Spine player, and adapts browser events to the state controller.
+- `data/player/asset-url.js` maps native file paths to OBS Browser's `http://absolute/` local-file scheme. Do not use `file://` URLs here: the player page has an `http://absolute` origin, so Chromium rejects direct `file://` fetches as cross-origin requests.
 
 ## Animation model
 
@@ -66,5 +67,4 @@ For non-speech integrations such as MIDI, WebSocket, stream-deck actions, or aut
 
 ## Tests
 
-`tests/state-controller.test.js` verifies idle, persistent states, one-shot return, optional states, and the independent mouth track. `tests/version-detector.test.js` verifies runtime selection. `tests/level-gate-test.c` verifies attack/release behavior. CTest runs all three groups.
-
+`tests/asset-url.test.js` verifies OBS-local URLs on Unix and Windows. `tests/state-controller.test.js` verifies idle, persistent states, one-shot return, optional states, and the independent mouth track. `tests/version-detector.test.js` verifies runtime selection. `tests/level-gate-test.c` verifies attack/release behavior. CTest runs all four groups.

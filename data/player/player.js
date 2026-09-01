@@ -23,13 +23,6 @@
     status.classList.remove('visible');
   }
 
-  function toFileUrl(path) {
-    if (!path || /^[a-z][a-z0-9+.-]*:/i.test(path)) return path;
-    const normalized = path.replace(/\\/g, '/');
-    const prefix = /^[a-z]:\//i.test(normalized) ? 'file:///' : 'file://';
-    return encodeURI(prefix + normalized);
-  }
-
   function extension(path) {
     const clean = String(path).split(/[?#]/, 1)[0];
     const dot = clean.lastIndexOf('.');
@@ -89,8 +82,8 @@
   async function configure(configuration) {
     latestConfiguration = configuration;
     const generation = ++configureGeneration;
-    const coreUrl = toFileUrl(configuration.corePath);
-    const atlasUrl = toFileUrl(configuration.atlasPath);
+    const coreUrl = SpineAssetUrl.fromPath(configuration.corePath);
+    const atlasUrl = SpineAssetUrl.fromPath(configuration.atlasPath);
     if (!coreUrl || !atlasUrl) {
       showStatus('Choose both a Spine skeleton and atlas file in Source Properties.');
       return;
