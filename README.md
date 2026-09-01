@@ -43,7 +43,9 @@ Restart OBS after installation. Linux is the locally verified build target. The 
 
 The sample provides `action`, `etc`, `expression_0`, `idle`, `no`, `pain`, `sad`, `smile`, `special`, `surprise`, `talk_end`, and `talk_start`. Custom characters may use different names; unknown animation names are safely ignored.
 
-Animation names are read directly from Spine JSON exports. Binary `.skel` exports use an adjacent catalog with the same base name and an `.animations.txt` suffix, one animation name per line; the bundled sample includes this catalog. Dropdowns remain editable so an existing scene or an uncatalogued binary export is never blocked.
+Animation names are read directly from Spine JSON exports. Binary `.skel` exports use an adjacent catalog with the same base name and an `.animations.txt` suffix, one animation name per line; all bundled characters include this catalog. Dropdowns remain editable so an existing scene or an uncatalogued binary export is never blocked.
+
+Generate or refresh a binary catalog from the asset itself with `node tools/generate-animation-catalog.js characters/Character/model.skel`. The tool detects Spine 4.0/4.1 and uses the matching bundled runtime; it does not guess names from binary strings.
 
 ## Maintenance
 

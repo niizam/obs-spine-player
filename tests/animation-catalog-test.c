@@ -33,9 +33,23 @@ static void test_json_catalog(void)
 	animation_catalog_free(&catalog);
 }
 
+static void test_egovista_binary_catalog(void)
+{
+	struct animation_catalog catalog = {0};
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/Egovista/c9025_00.skel", TEST_CHARACTER_DIR);
+	assert(animation_catalog_load(&catalog, path));
+	assert(catalog.count == 7);
+	assert(strcmp(catalog.names[0], "delight") == 0);
+	assert(strcmp(catalog.names[1], "idle") == 0);
+	assert(strcmp(catalog.names[6], "worry") == 0);
+	animation_catalog_free(&catalog);
+}
+
 int main(void)
 {
 	test_binary_sidecar_catalog();
+	test_egovista_binary_catalog();
 	test_json_catalog();
 	return 0;
 }

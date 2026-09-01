@@ -18,6 +18,7 @@ This boundary keeps OBS-specific lifetime and audio threading out of the player,
 - `src/level-gate.c` converts an amplitude stream into a stable open/closed signal. It contains no OBS or speech-specific behavior.
 - `src/browser-bridge.c` is the only native dependency on the OBS Browser `javascript_event` procedure.
 - `src/animation-catalog.c` discovers JSON animation keys and reads adjacent `.animations.txt` catalogs for binary exports. OBS properties use one shared catalog to populate editable dropdowns, preserving unknown values from existing scenes.
+- `tools/generate-animation-catalog.js` uses the matching bundled Spine runtime to parse a binary skeleton and write its catalog. This keeps full version-specific binary parsing out of the native plugin while making bundled catalogs reproducible.
 - `data/player/version-detector.js` reads the version from Spine binary/JSON headers and selects only the bundled 4.0 or 4.1 family.
 - `data/player/state-controller.js` owns animation semantics independently of DOM/loading code.
 - `data/player/player-options.js` builds runtime options and supplies the default animation during construction. Spine Player uses that animation to calculate its initial viewport; applying or resetting it inside the success callback can produce a loaded but invisible character.
