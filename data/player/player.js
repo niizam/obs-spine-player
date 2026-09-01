@@ -96,19 +96,23 @@
       return;
     }
 
+    const fingerprint = JSON.stringify([coreUrl, atlasUrl, configuration.runtime]);
+    if (fingerprint === assetFingerprint && player) {
+      applyControlConfiguration(configuration);
+      return;
+    }
+
     try {
       const family = configuration.runtime === 'auto' ? await detectRuntime(coreUrl) : configuration.runtime;
       if (!runtimeFiles[family]) throw new Error(`Unsupported Spine runtime selection: ${family}`);
       await loadRuntime(family);
       if (generation !== configureGeneration) return;
 
-      const fingerprint = JSON.stringify([coreUrl, atlasUrl, family]);
-      if (fingerprint === assetFingerprint && player) {
-        applyControlConfiguration(configuration);
-        return;
-      }
       assetFingerprint = fingerprint;
-      if (player) player.dispose();
+      if (player) {
+        player.dispose();
+        player = null;
+      }
       controller = null;
       container.replaceChildren();
       showStatus('Loading Spine character…');
@@ -122,6 +126,7 @@
         showControls: false,
         showLoading: true,
         success: function (loadedPlayer) {
+          if (player !== loadedPlayer) return;
           player = loadedPlayer;
           const animations = availableAnimations(loadedPlayer);
           controller = new SpineStateController(loadedPlayer, animations, latestConfiguration);
@@ -129,14 +134,21 @@
           applyControlConfiguration(latestConfiguration);
           hideStatus();
         },
-        error: function (_failedPlayer, message) {
+        error: function (failedPlayer, message) {
+          if (player !== failedPlayer) return;
+          assetFingerprint = null;
+          player = null;
           showStatus(`Could not load Spine character:\n${String(message)}`);
         }
       };
       options[extension(coreUrl) === 'json' ? 'jsonUrl' : 'skelUrl'] = coreUrl;
       player = new spine.SpinePlayer(container, options);
     } catch (error) {
-      showStatus(`Could not configure Spine character:\n${error.message || error}`);
+      if (generation === configureGeneration) {
+        assetFingerprint = null;
+        player = null;
+        showStatus(`Could not configure Spine character:\n${error.message || error}`);
+      }
     }
   }
 
