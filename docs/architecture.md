@@ -39,16 +39,9 @@ OBS invokes the audio capture callback on its audio path. That callback calculat
 
 The video tick consumes the pending peak, advances the attack/release gate, and emits a browser event only when the boolean yap state changes. This avoids flooding CEF and gives a future audio feature a clear real-time-safe boundary.
 
-## Supplied asset findings
+## Character assets
 
-`characters/Mekami_Shifty/c610_00.skel` reports Spine `4.1.20`. Its bounds are approximately 961 × 2286 units and its animation set is:
-
-```text
-action, etc, expression_0, idle, no, pain, sad, smile,
-special, surprise, talk_end, talk_start
-```
-
-The defaults use persistent facial/body states for `smile`, `sad`, `surprise`, `pain`, and `expression_0`; `action`, `special`, and `no` default to one-shot behavior.
+Character skeletons, atlases, textures, and animation catalogs are intentionally excluded from version control. The native source has no character-specific defaults. A developer may keep assets in the ignored local `characters/` directory for testing; CMake installs that directory only when it exists.
 
 ## Reference decisions
 

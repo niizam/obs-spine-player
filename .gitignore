@@ -1,8 +1,8 @@
 /build/
 /dist/
 /references/
+/characters/
 /.cache/
 compile_commands.json
 *.swp
 *~
-

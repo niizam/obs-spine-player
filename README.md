@@ -12,7 +12,6 @@ No speech recognition, network service, or external audio process is used.
 - Independent mouth overlay on Spine track 1, leaving `idle` or the selected emotion on track 0.
 - Optional emotion state machine with eight configurable looping or one-shot slots.
 - Optional OBS hotkeys for all eight slots and returning to the default animation.
-- Bundled `Mekami_Shifty` sample, preconfigured with its real exported animation names.
 
 ## Requirements
 
@@ -34,18 +33,18 @@ Restart OBS after installation. Linux is the locally verified build target. The 
 
 ## Use
 
-1. Add a **Spine Character** source. The bundled sample opens in `idle` by default.
-2. For another character, choose its `.skel` or `.json` file and `.atlas` file. Atlas image pages must remain at paths referenced by the atlas.
+1. Add a **Spine Character** source and choose its `.skel` or `.json` file and `.atlas` file. Atlas image pages must remain at paths referenced by the atlas.
+2. The character starts in `idle` by default; choose another detected animation when needed.
 3. Leave **Spine runtime** on auto-detect, or force 4.0/4.1 if a local-file policy prevents version probing.
 4. Enable yap mode, choose an existing OBS microphone/audio input, and tune the threshold. The selected source must be active in OBS to produce audio callbacks.
 5. Choose default, mouth, and emotion/action animations from the detected dropdowns. Disable **Loop** for actions that should return to `idle` after one play.
 6. Open **Settings → Hotkeys**, search for “Spine Player,” and bind the desired source hotkeys.
 
-The sample provides `action`, `etc`, `expression_0`, `idle`, `no`, `pain`, `sad`, `smile`, `special`, `surprise`, `talk_end`, and `talk_start`. Custom characters may use different names; unknown animation names are safely ignored.
+Animation names are read directly from Spine JSON exports. Binary `.skel` exports use an adjacent catalog with the same base name and an `.animations.txt` suffix, one animation name per line. Dropdowns remain editable so an existing scene or an uncatalogued binary export is never blocked.
 
-Animation names are read directly from Spine JSON exports. Binary `.skel` exports use an adjacent catalog with the same base name and an `.animations.txt` suffix, one animation name per line; all bundled characters include this catalog. Dropdowns remain editable so an existing scene or an uncatalogued binary export is never blocked.
+Generate or refresh a binary catalog from the asset itself with `node tools/generate-animation-catalog.js /path/to/model.skel`. The tool detects Spine 4.0/4.1 and uses the matching bundled runtime; it does not guess names from binary strings.
 
-Generate or refresh a binary catalog from the asset itself with `node tools/generate-animation-catalog.js characters/Character/model.skel`. The tool detects Spine 4.0/4.1 and uses the matching bundled runtime; it does not guess names from binary strings.
+Character assets are intentionally excluded from version control. A local `characters/` directory is ignored by Git and installed when present, but published source packages contain no character skeletons, atlases, textures, or animation catalogs.
 
 ## Maintenance
 

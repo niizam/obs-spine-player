@@ -399,20 +399,7 @@ static void spine_source_enum_children(void *data, obs_source_enum_proc_t callba
 
 static void spine_source_defaults(obs_data_t *settings)
 {
-	static const char *default_emotions[EMOTION_COUNT] = {"smile", "sad", "surprise", "pain", "action", "special",
-							     "no", "expression_0"};
 	static const bool default_loops[EMOTION_COUNT] = {true, true, true, true, false, false, false, true};
-	char *core_path = obs_module_file("characters/Mekami_Shifty/c610_00.skel");
-	char *atlas_path = obs_module_file("characters/Mekami_Shifty/c610_00.atlas");
-	if (core_path) {
-		obs_data_set_default_string(settings, SETTING_CORE_PATH, core_path);
-		bfree(core_path);
-	}
-	if (atlas_path) {
-		obs_data_set_default_string(settings, SETTING_ATLAS_PATH, atlas_path);
-		bfree(atlas_path);
-	}
-
 	obs_data_set_default_string(settings, SETTING_RUNTIME, "auto");
 	obs_data_set_default_string(settings, SETTING_DEFAULT_ANIMATION, "idle");
 	obs_data_set_default_int(settings, SETTING_WIDTH, 1080);
@@ -429,7 +416,7 @@ static void spine_source_defaults(obs_data_t *settings)
 		char loop_key[32];
 		emotion_setting_name(animation_key, sizeof(animation_key), index);
 		emotion_loop_setting_name(loop_key, sizeof(loop_key), index);
-		obs_data_set_default_string(settings, animation_key, default_emotions[index]);
+		obs_data_set_default_string(settings, animation_key, "");
 		obs_data_set_default_bool(settings, loop_key, default_loops[index]);
 	}
 }

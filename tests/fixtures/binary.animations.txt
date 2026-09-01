@@ -1,0 +1,4 @@
+# Synthetic animation catalog used by the native catalog test.
+idle
+smile
+talk

@@ -52,7 +52,9 @@ install(
   RUNTIME DESTINATION "${OBS_PLUGIN_BINARY_DESTINATION}"
 )
 install(DIRECTORY data/ DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}")
-install(DIRECTORY characters/ DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}/characters")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/characters")
+  install(DIRECTORY characters/ DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}/characters")
+endif()
 
 enable_testing()
 find_program(NODE_EXECUTABLE node)
@@ -76,7 +78,6 @@ target_compile_features(animation-catalog-tests PRIVATE c_std_11)
 target_compile_definitions(
   animation-catalog-tests
   PRIVATE
-    TEST_CHARACTER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/characters"
     TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
 )
 add_test(NAME animation-catalog-tests COMMAND animation-catalog-tests)
