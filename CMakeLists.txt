@@ -11,6 +11,8 @@ target_sources(
   obs-spine-player
   PRIVATE
     src/plugin-main.c
+    src/browser-bridge.c
+    src/browser-bridge.h
     src/spine-source.c
     src/spine-source.h
 )
@@ -48,6 +50,6 @@ install(DIRECTORY characters/ DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}/charac
 enable_testing()
 find_program(NODE_EXECUTABLE node)
 if(NODE_EXECUTABLE)
-  add_test(NAME player-state-tests COMMAND "${NODE_EXECUTABLE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+  file(GLOB PLAYER_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.test.js")
+  add_test(NAME player-state-tests COMMAND "${NODE_EXECUTABLE}" --test ${PLAYER_TEST_FILES})
 endif()
-
