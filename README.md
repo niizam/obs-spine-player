@@ -38,12 +38,13 @@ Restart OBS after installation. Linux is the locally verified build target. The 
 2. For another character, choose its `.skel` or `.json` file and `.atlas` file. Atlas image pages must remain at paths referenced by the atlas.
 3. Leave **Spine runtime** on auto-detect, or force 4.0/4.1 if a local-file policy prevents version probing.
 4. Enable yap mode, choose an existing OBS microphone/audio input, and tune the threshold. The selected source must be active in OBS to produce audio callbacks.
-5. Configure emotion/action animation names. Disable **Loop** for actions that should return to `idle` after one play.
+5. Choose default, mouth, and emotion/action animations from the detected dropdowns. Disable **Loop** for actions that should return to `idle` after one play.
 6. Open **Settings → Hotkeys**, search for “Spine Player,” and bind the desired source hotkeys.
 
 The sample provides `action`, `etc`, `expression_0`, `idle`, `no`, `pain`, `sad`, `smile`, `special`, `surprise`, `talk_end`, and `talk_start`. Custom characters may use different names; unknown animation names are safely ignored.
 
+Animation names are read directly from Spine JSON exports. Binary `.skel` exports use an adjacent catalog with the same base name and an `.animations.txt` suffix, one animation name per line; the bundled sample includes this catalog. Dropdowns remain editable so an existing scene or an uncatalogued binary export is never blocked.
+
 ## Maintenance
 
 See [Architecture](docs/architecture.md) for component boundaries, the supplied-reference findings, and the extension path for future ASR/STT or speech-based emotion inputs. Third-party runtime licensing is recorded in [Third-party notices](THIRD_PARTY_NOTICES.md).
-

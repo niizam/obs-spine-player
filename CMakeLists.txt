@@ -11,6 +11,8 @@ target_sources(
   obs-spine-player
   PRIVATE
     src/plugin-main.c
+    src/animation-catalog.c
+    src/animation-catalog.h
     src/browser-bridge.c
     src/browser-bridge.h
     src/level-gate.c
@@ -66,3 +68,15 @@ if(UNIX)
   target_link_libraries(level-gate-tests PRIVATE m)
 endif()
 add_test(NAME level-gate-tests COMMAND level-gate-tests)
+
+add_executable(animation-catalog-tests tests/animation-catalog-test.c src/animation-catalog.c)
+target_include_directories(animation-catalog-tests PRIVATE src)
+target_link_libraries(animation-catalog-tests PRIVATE OBS::libobs)
+target_compile_features(animation-catalog-tests PRIVATE c_std_11)
+target_compile_definitions(
+  animation-catalog-tests
+  PRIVATE
+    TEST_CHARACTER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/characters"
+    TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+)
+add_test(NAME animation-catalog-tests COMMAND animation-catalog-tests)

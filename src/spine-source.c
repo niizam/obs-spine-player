@@ -1,5 +1,6 @@
 #include "spine-source.h"
 
+#include "animation-catalog.h"
 #include "browser-bridge.h"
 #include "level-gate.h"
 
@@ -476,12 +477,61 @@ static bool state_enabled_modified(obs_properties_t *properties, obs_property_t 
 	return true;
 }
 
+static bool animation_property_contains(obs_property_t *property, const char *value)
+{
+	for (size_t index = 0; index < obs_property_list_item_count(property); index++) {
+		if (strcmp(obs_property_list_item_string(property, index), value) == 0)
+			return true;
+	}
+	return false;
+}
+
+static void populate_animation_property(obs_property_t *property, const struct animation_catalog *catalog,
+					obs_data_t *settings, const char *setting_name, bool allow_empty)
+{
+	obs_property_list_clear(property);
+	if (allow_empty)
+		obs_property_list_add_string(property, obs_module_text("AnimationNone"), "");
+	for (size_t index = 0; index < catalog->count; index++)
+		obs_property_list_add_string(property, catalog->names[index], catalog->names[index]);
+
+	const char *current = obs_data_get_string(settings, setting_name);
+	if (current && *current && !animation_property_contains(property, current))
+		obs_property_list_add_string(property, current, current);
+}
+
+static void populate_animation_properties(obs_properties_t *properties, obs_data_t *settings)
+{
+	struct animation_catalog catalog = {0};
+	animation_catalog_load(&catalog, obs_data_get_string(settings, SETTING_CORE_PATH));
+	populate_animation_property(obs_properties_get(properties, SETTING_DEFAULT_ANIMATION), &catalog, settings,
+				    SETTING_DEFAULT_ANIMATION, false);
+	populate_animation_property(obs_properties_get(properties, SETTING_YAP_ANIMATION), &catalog, settings,
+				    SETTING_YAP_ANIMATION, true);
+	for (size_t index = 0; index < EMOTION_COUNT; index++) {
+		char animation_key[32];
+		emotion_setting_name(animation_key, sizeof(animation_key), index);
+		populate_animation_property(obs_properties_get(properties, animation_key), &catalog, settings,
+					    animation_key, true);
+	}
+	animation_catalog_free(&catalog);
+}
+
+static bool core_path_modified(obs_properties_t *properties, obs_property_t *property, obs_data_t *settings)
+{
+	populate_animation_properties(properties, settings);
+	UNUSED_PARAMETER(property);
+	return true;
+}
+
 static obs_properties_t *spine_source_properties(void *data)
 {
 	struct spine_source *context = data;
 	obs_properties_t *properties = obs_properties_create();
-	obs_properties_add_path(properties, SETTING_CORE_PATH, obs_module_text("CoreFile"), OBS_PATH_FILE,
-				"Spine skeleton (*.skel *.json);;All files (*.*)", NULL);
+	obs_property_t *core_path = obs_properties_add_path(properties, SETTING_CORE_PATH, obs_module_text("CoreFile"),
+						  OBS_PATH_FILE,
+						  "Spine skeleton (*.skel *.json);;All files (*.*)", NULL);
+	obs_property_set_modified_callback(core_path, core_path_modified);
 	obs_properties_add_path(properties, SETTING_ATLAS_PATH, obs_module_text("AtlasFile"), OBS_PATH_FILE,
 				"Spine atlas (*.atlas);;All files (*.*)", NULL);
 	obs_property_t *runtime = obs_properties_add_list(properties, SETTING_RUNTIME, obs_module_text("RuntimeVersion"),
@@ -489,8 +539,8 @@ static obs_properties_t *spine_source_properties(void *data)
 	obs_property_list_add_string(runtime, obs_module_text("RuntimeAuto"), "auto");
 	obs_property_list_add_string(runtime, "Spine 4.0", "4.0");
 	obs_property_list_add_string(runtime, "Spine 4.1", "4.1");
-	obs_properties_add_text(properties, SETTING_DEFAULT_ANIMATION, obs_module_text("DefaultAnimation"),
-				OBS_TEXT_DEFAULT);
+	obs_properties_add_list(properties, SETTING_DEFAULT_ANIMATION, obs_module_text("DefaultAnimation"),
+				OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
 	obs_properties_add_int(properties, SETTING_WIDTH, obs_module_text("CanvasWidth"), 64, 7680, 1);
 	obs_properties_add_int(properties, SETTING_HEIGHT, obs_module_text("CanvasHeight"), 64, 7680, 1);
 
@@ -507,7 +557,8 @@ static obs_properties_t *spine_source_properties(void *data)
 					0.5);
 	obs_properties_add_float(properties, SETTING_YAP_ATTACK, obs_module_text("YapAttack"), 0.0, 500.0, 5.0);
 	obs_properties_add_float(properties, SETTING_YAP_RELEASE, obs_module_text("YapRelease"), 0.0, 2000.0, 10.0);
-	obs_properties_add_text(properties, SETTING_YAP_ANIMATION, obs_module_text("YapAnimation"), OBS_TEXT_DEFAULT);
+	obs_properties_add_list(properties, SETTING_YAP_ANIMATION, obs_module_text("YapAnimation"),
+				OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
 
 	obs_property_t *state_enabled =
 		obs_properties_add_bool(properties, SETTING_STATE_ENABLED, obs_module_text("StateEnabled"));
@@ -522,10 +573,15 @@ static obs_properties_t *spine_source_properties(void *data)
 		emotion_loop_setting_name(loop_key, sizeof(loop_key), index);
 		snprintf(animation_label, sizeof(animation_label), "%s %zu", obs_module_text("EmotionAnimation"), index + 1);
 		snprintf(loop_label, sizeof(loop_label), "%s %zu", obs_module_text("EmotionLoop"), index + 1);
-		obs_property_t *animation =
-			obs_properties_add_text(properties, animation_key, animation_label, OBS_TEXT_DEFAULT);
+		obs_property_t *animation = obs_properties_add_list(properties, animation_key, animation_label,
+								OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
 		obs_property_set_long_description(animation, obs_module_text("EmotionAnimationHelp"));
 		obs_properties_add_bool(properties, loop_key, loop_label);
+	}
+	obs_data_t *settings = context ? obs_source_get_settings(context->source) : NULL;
+	if (settings) {
+		populate_animation_properties(properties, settings);
+		obs_data_release(settings);
 	}
 	return properties;
 }
@@ -548,4 +604,3 @@ struct obs_source_info spine_source_info = {
 	.get_properties = spine_source_properties,
 	.icon_type = OBS_ICON_TYPE_BROWSER,
 };
-

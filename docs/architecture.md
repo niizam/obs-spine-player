@@ -17,6 +17,7 @@ This boundary keeps OBS-specific lifetime and audio threading out of the player,
 - `src/spine-source.c` registers the source, owns the private `browser_source`, exposes properties/hotkeys, subscribes to a selected audio source, and emits normalized control events.
 - `src/level-gate.c` converts an amplitude stream into a stable open/closed signal. It contains no OBS or speech-specific behavior.
 - `src/browser-bridge.c` is the only native dependency on the OBS Browser `javascript_event` procedure.
+- `src/animation-catalog.c` discovers JSON animation keys and reads adjacent `.animations.txt` catalogs for binary exports. OBS properties use one shared catalog to populate editable dropdowns, preserving unknown values from existing scenes.
 - `data/player/version-detector.js` reads the version from Spine binary/JSON headers and selects only the bundled 4.0 or 4.1 family.
 - `data/player/state-controller.js` owns animation semantics independently of DOM/loading code.
 - `data/player/player-options.js` builds runtime options and supplies the default animation during construction. Spine Player uses that animation to calculate its initial viewport; applying or resetting it inside the success callback can produce a loaded but invisible character.
@@ -68,4 +69,4 @@ For non-speech integrations such as MIDI, WebSocket, stream-deck actions, or aut
 
 ## Tests
 
-`tests/asset-url.test.js` verifies OBS-local URLs on Unix and Windows. `tests/player-options.test.js` verifies initial animation and asset loader options. `tests/state-controller.test.js` verifies idle, persistent states, one-shot return, optional states, and the independent mouth track. `tests/version-detector.test.js` verifies runtime selection. `tests/level-gate-test.c` verifies attack/release behavior. CTest runs all five groups.
+`tests/asset-url.test.js` verifies OBS-local URLs on Unix and Windows. `tests/player-options.test.js` verifies initial animation and asset loader options. `tests/state-controller.test.js` verifies idle, persistent states, one-shot return, optional states, and the independent mouth track. `tests/version-detector.test.js` verifies runtime selection. `tests/animation-catalog-test.c` verifies binary sidecars and JSON discovery. `tests/level-gate-test.c` verifies attack/release behavior. CTest runs all six groups.
