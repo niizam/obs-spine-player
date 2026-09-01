@@ -1,0 +1,8 @@
+/build/
+/dist/
+/references/
+/.cache/
+compile_commands.json
+*.swp
+*~
+

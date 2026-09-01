@@ -1,0 +1,53 @@
+cmake_minimum_required(VERSION 3.22)
+
+project(obs-spine-player VERSION 0.1.0 LANGUAGES C)
+
+include(GNUInstallDirs)
+
+find_package(libobs CONFIG REQUIRED)
+
+add_library(obs-spine-player MODULE)
+target_sources(
+  obs-spine-player
+  PRIVATE
+    src/plugin-main.c
+    src/spine-source.c
+    src/spine-source.h
+)
+target_link_libraries(obs-spine-player PRIVATE OBS::libobs)
+target_compile_features(obs-spine-player PRIVATE c_std_11)
+target_compile_definitions(obs-spine-player PRIVATE PLUGIN_VERSION="${PROJECT_VERSION}")
+
+if(MSVC)
+  target_compile_options(obs-spine-player PRIVATE /W4)
+else()
+  target_compile_options(obs-spine-player PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+set_target_properties(obs-spine-player PROPERTIES PREFIX "")
+
+if(WIN32)
+  set(OBS_PLUGIN_BINARY_DESTINATION "obs-plugins/64bit")
+  set(OBS_PLUGIN_DATA_DESTINATION "data/obs-plugins/obs-spine-player")
+elseif(APPLE)
+  set(OBS_PLUGIN_BINARY_DESTINATION "obs-plugins")
+  set(OBS_PLUGIN_DATA_DESTINATION "data/obs-plugins/obs-spine-player")
+else()
+  set(OBS_PLUGIN_BINARY_DESTINATION "${CMAKE_INSTALL_LIBDIR}/obs-plugins")
+  set(OBS_PLUGIN_DATA_DESTINATION "${CMAKE_INSTALL_DATADIR}/obs/obs-plugins/obs-spine-player")
+endif()
+
+install(
+  TARGETS obs-spine-player
+  LIBRARY DESTINATION "${OBS_PLUGIN_BINARY_DESTINATION}"
+  RUNTIME DESTINATION "${OBS_PLUGIN_BINARY_DESTINATION}"
+)
+install(DIRECTORY data/ DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}")
+install(DIRECTORY characters/ DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}/characters")
+
+enable_testing()
+find_program(NODE_EXECUTABLE node)
+if(NODE_EXECUTABLE)
+  add_test(NAME player-state-tests COMMAND "${NODE_EXECUTABLE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+endif()
+
