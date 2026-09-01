@@ -23,16 +23,10 @@
     status.classList.remove('visible');
   }
 
-  function extension(path) {
-    const clean = String(path).split(/[?#]/, 1)[0];
-    const dot = clean.lastIndexOf('.');
-    return dot >= 0 ? clean.slice(dot + 1).toLowerCase() : '';
-  }
-
   async function detectRuntime(coreUrl) {
     const response = await fetch(coreUrl);
     if (!response.ok) throw new Error(`Could not read skeleton (${response.status})`);
-    if (extension(coreUrl) === 'json') {
+    if (SpinePlayerOptions.extension(coreUrl) === 'json') {
       return SpineVersionDetector.runtimeFamily(SpineVersionDetector.fromJson(await response.text()));
     }
     return SpineVersionDetector.runtimeFamily(SpineVersionDetector.fromBinary(await response.arrayBuffer()));
@@ -110,20 +104,12 @@
       container.replaceChildren();
       showStatus('Loading Spine character…');
 
-      const options = {
-        atlasUrl,
-        alpha: true,
-        backgroundColor: '00000000',
-        premultipliedAlpha: true,
-        preserveDrawingBuffer: false,
-        showControls: false,
-        showLoading: true,
+      const options = SpinePlayerOptions.create(configuration, coreUrl, atlasUrl, {
         success: function (loadedPlayer) {
           if (player !== loadedPlayer) return;
           player = loadedPlayer;
           const animations = availableAnimations(loadedPlayer);
           controller = new SpineStateController(loadedPlayer, animations, latestConfiguration);
-          controller.start();
           applyControlConfiguration(latestConfiguration);
           hideStatus();
         },
@@ -133,8 +119,7 @@
           player = null;
           showStatus(`Could not load Spine character:\n${String(message)}`);
         }
-      };
-      options[extension(coreUrl) === 'json' ? 'jsonUrl' : 'skelUrl'] = coreUrl;
+      });
       player = new spine.SpinePlayer(container, options);
     } catch (error) {
       if (generation === configureGeneration) {

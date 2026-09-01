@@ -19,6 +19,7 @@ This boundary keeps OBS-specific lifetime and audio threading out of the player,
 - `src/browser-bridge.c` is the only native dependency on the OBS Browser `javascript_event` procedure.
 - `data/player/version-detector.js` reads the version from Spine binary/JSON headers and selects only the bundled 4.0 or 4.1 family.
 - `data/player/state-controller.js` owns animation semantics independently of DOM/loading code.
+- `data/player/player-options.js` builds runtime options and supplies the default animation during construction. Spine Player uses that animation to calculate its initial viewport; applying or resetting it inside the success callback can produce a loaded but invisible character.
 - `data/player/player.js` loads assets, creates/disposes the matching Spine player, and adapts browser events to the state controller.
 - `data/player/asset-url.js` maps native file paths to OBS Browser's `http://absolute/` local-file scheme. Do not use `file://` URLs here: the player page has an `http://absolute` origin, so Chromium rejects direct `file://` fetches as cross-origin requests.
 
@@ -67,4 +68,4 @@ For non-speech integrations such as MIDI, WebSocket, stream-deck actions, or aut
 
 ## Tests
 
-`tests/asset-url.test.js` verifies OBS-local URLs on Unix and Windows. `tests/state-controller.test.js` verifies idle, persistent states, one-shot return, optional states, and the independent mouth track. `tests/version-detector.test.js` verifies runtime selection. `tests/level-gate-test.c` verifies attack/release behavior. CTest runs all four groups.
+`tests/asset-url.test.js` verifies OBS-local URLs on Unix and Windows. `tests/player-options.test.js` verifies initial animation and asset loader options. `tests/state-controller.test.js` verifies idle, persistent states, one-shot return, optional states, and the independent mouth track. `tests/version-detector.test.js` verifies runtime selection. `tests/level-gate-test.c` verifies attack/release behavior. CTest runs all five groups.
