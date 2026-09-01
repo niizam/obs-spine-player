@@ -13,10 +13,15 @@ target_sources(
     src/plugin-main.c
     src/browser-bridge.c
     src/browser-bridge.h
+    src/level-gate.c
+    src/level-gate.h
     src/spine-source.c
     src/spine-source.h
 )
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs)
+if(UNIX)
+  target_link_libraries(obs-spine-player PRIVATE m)
+endif()
 target_compile_features(obs-spine-player PRIVATE c_std_11)
 target_compile_definitions(obs-spine-player PRIVATE PLUGIN_VERSION="${PROJECT_VERSION}")
 
@@ -53,3 +58,11 @@ if(NODE_EXECUTABLE)
   file(GLOB PLAYER_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.test.js")
   add_test(NAME player-state-tests COMMAND "${NODE_EXECUTABLE}" --test ${PLAYER_TEST_FILES})
 endif()
+
+add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
+target_include_directories(level-gate-tests PRIVATE src)
+target_compile_features(level-gate-tests PRIVATE c_std_11)
+if(UNIX)
+  target_link_libraries(level-gate-tests PRIVATE m)
+endif()
+add_test(NAME level-gate-tests COMMAND level-gate-tests)

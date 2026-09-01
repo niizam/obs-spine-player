@@ -9,8 +9,10 @@
   let loadedRuntime = null;
   let runtimePromise = null;
   let player = null;
+  let controller = null;
   let assetFingerprint = null;
   let configureGeneration = 0;
+  let latestConfiguration = {};
 
   function showStatus(message) {
     status.textContent = message;
@@ -78,13 +80,14 @@
     });
   }
 
-  function resolveAnimation(requested, available) {
-    if (available.includes(requested)) return requested;
-    const folded = String(requested).toLowerCase();
-    return available.find(function (name) { return name.toLowerCase() === folded; }) || available[0];
+  function applyControlConfiguration(configuration) {
+    if (!controller) return;
+    controller.configure(configuration);
+    controller.setYapping(Boolean(configuration.yapEnabled && configuration.yapActive));
   }
 
   async function configure(configuration) {
+    latestConfiguration = configuration;
     const generation = ++configureGeneration;
     const coreUrl = toFileUrl(configuration.corePath);
     const atlasUrl = toFileUrl(configuration.atlasPath);
@@ -100,9 +103,13 @@
       if (generation !== configureGeneration) return;
 
       const fingerprint = JSON.stringify([coreUrl, atlasUrl, family]);
-      if (fingerprint === assetFingerprint && player) return;
+      if (fingerprint === assetFingerprint && player) {
+        applyControlConfiguration(configuration);
+        return;
+      }
       assetFingerprint = fingerprint;
       if (player) player.dispose();
+      controller = null;
       container.replaceChildren();
       showStatus('Loading Spine character…');
 
@@ -117,8 +124,9 @@
         success: function (loadedPlayer) {
           player = loadedPlayer;
           const animations = availableAnimations(loadedPlayer);
-          const initial = resolveAnimation(configuration.defaultAnimation || 'idle', animations);
-          if (initial) loadedPlayer.animationState.setAnimation(0, initial, true);
+          controller = new SpineStateController(loadedPlayer, animations, latestConfiguration);
+          controller.start();
+          applyControlConfiguration(latestConfiguration);
           hideStatus();
         },
         error: function (_failedPlayer, message) {
@@ -135,5 +143,17 @@
   window.addEventListener('obsSpineConfigure', function (event) {
     configure(event.detail || {});
   });
-})();
 
+  window.addEventListener('obsSpineYap', function (event) {
+    if (controller) controller.setYapping(Boolean(event.detail && event.detail.active));
+  });
+
+  window.addEventListener('obsSpineTrigger', function (event) {
+    const detail = event.detail || {};
+    if (controller) controller.trigger(detail.animation, detail.loop);
+  });
+
+  window.addEventListener('obsSpineReset', function () {
+    if (controller) controller.reset();
+  });
+})();
