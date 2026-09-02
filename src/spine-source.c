@@ -5,6 +5,7 @@
 #include "level-gate.h"
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <util/platform.h>
@@ -51,11 +52,26 @@ struct spine_source {
 	bool yap_enabled;
 	bool state_enabled;
 	bool hotkeys_enabled;
+	bool bridge_ready_logged;
+	bool bridge_failure_logged;
+	bool first_render_logged;
 	struct emotion_hotkey emotion_hotkeys[EMOTION_COUNT];
 	obs_hotkey_id reset_hotkey;
 };
 
 static void spine_source_update(void *data, obs_data_t *settings);
+
+static void spine_log(const struct spine_source *context, int level, const char *format, ...)
+{
+	char message[1024];
+	va_list arguments;
+	va_start(arguments, format);
+	vsnprintf(message, sizeof(message), format, arguments);
+	va_end(arguments);
+
+	const char *name = context && context->source ? obs_source_get_name(context->source) : NULL;
+	blog(level, "[OBS Spine Player: %s] %s", name && *name ? name : "unnamed source", message);
+}
 
 static void emotion_setting_name(char *buffer, size_t size, size_t index)
 {
@@ -73,13 +89,20 @@ static const char *spine_source_get_name(void *unused)
 	return obs_module_text("SpineSource");
 }
 
-static obs_source_t *create_browser_source(uint32_t width, uint32_t height)
+static obs_source_t *create_browser_source(struct spine_source *context, uint32_t width, uint32_t height)
 {
 	char *player_path = obs_module_file("player/index.html");
 	if (!player_path) {
-		blog(LOG_ERROR, "[OBS Spine Player] player/index.html is missing from the plugin data directory");
+		spine_log(context, LOG_ERROR, "player/index.html is missing from the plugin data directory");
 		return NULL;
 	}
+	if (!os_file_exists(player_path)) {
+		spine_log(context, LOG_ERROR, "browser page does not exist: %s", player_path);
+		bfree(player_path);
+		return NULL;
+	}
+
+	spine_log(context, LOG_INFO, "creating private Browser Source at %ux%u from %s", width, height, player_path);
 
 	obs_data_t *settings = obs_data_create();
 	obs_data_set_bool(settings, "is_local_file", true);
@@ -91,13 +114,33 @@ static obs_source_t *create_browser_source(uint32_t width, uint32_t height)
 	obs_data_set_bool(settings, "reroute_audio", false);
 	obs_data_set_int(settings, "webpage_control_level", 0);
 
-	obs_source_t *browser = obs_source_create_private("browser_source", NULL, settings);
+	obs_source_t *browser = obs_source_create_private("browser_source", "OBS Spine Player Renderer", settings);
 	obs_data_release(settings);
 	bfree(player_path);
 
 	if (!browser)
-		blog(LOG_ERROR, "[OBS Spine Player] could not create Browser Source; install or enable obs-browser");
+		spine_log(context, LOG_ERROR, "could not create Browser Source; install or enable obs-browser");
+	else
+		spine_log(context, LOG_INFO, "private Browser Source created successfully");
 	return browser;
+}
+
+static bool send_browser_event(struct spine_source *context, const char *event_name, obs_data_t *payload)
+{
+	const bool sent = browser_bridge_send(context->browser, event_name, payload);
+	if (!sent && !context->bridge_failure_logged) {
+		spine_log(context, LOG_ERROR, "could not send browser event '%s'; the obs-browser procedure is unavailable",
+			  event_name);
+		context->bridge_failure_logged = true;
+	} else if (sent) {
+		if (context->bridge_failure_logged)
+			spine_log(context, LOG_INFO, "browser event bridge recovered");
+		else if (!context->bridge_ready_logged)
+			spine_log(context, LOG_INFO, "browser event bridge is available");
+		context->bridge_ready_logged = true;
+		context->bridge_failure_logged = false;
+	}
+	return sent;
 }
 
 static void update_browser_dimensions(struct spine_source *context)
@@ -116,7 +159,7 @@ static void send_yap_state(struct spine_source *context)
 {
 	obs_data_t *payload = obs_data_create();
 	obs_data_set_bool(payload, "active", context->yap_enabled && context->gate.active);
-	browser_bridge_send(context->browser, "obsSpineYap", payload);
+	send_browser_event(context, "obsSpineYap", payload);
 	obs_data_release(payload);
 }
 
@@ -154,7 +197,7 @@ static void send_configuration(struct spine_source *context)
 	obs_data_set_array(payload, "emotions", emotions);
 	obs_data_array_release(emotions);
 
-	browser_bridge_send(context->browser, "obsSpineConfigure", payload);
+	send_browser_event(context, "obsSpineConfigure", payload);
 	obs_data_release(payload);
 	obs_data_release(settings);
 }
@@ -174,7 +217,7 @@ static void send_emotion(struct spine_source *context, size_t index)
 		obs_data_t *payload = obs_data_create();
 		obs_data_set_string(payload, "animation", animation);
 		obs_data_set_bool(payload, "loop", obs_data_get_bool(settings, loop_key));
-		browser_bridge_send(context->browser, "obsSpineTrigger", payload);
+		send_browser_event(context, "obsSpineTrigger", payload);
 		obs_data_release(payload);
 	}
 	obs_data_release(settings);
@@ -194,7 +237,7 @@ static void reset_hotkey_pressed(void *data, obs_hotkey_id id, obs_hotkey_t *hot
 	struct spine_source *context = data;
 	if (pressed && context->state_enabled && context->hotkeys_enabled) {
 		obs_data_t *payload = obs_data_create();
-		browser_bridge_send(context->browser, "obsSpineReset", payload);
+		send_browser_event(context, "obsSpineReset", payload);
 		obs_data_release(payload);
 	}
 	UNUSED_PARAMETER(id);
@@ -255,6 +298,7 @@ static void audio_captured(void *data, obs_source_t *source, const struct audio_
 static void disconnect_audio_source(struct spine_source *context)
 {
 	if (context->audio_input) {
+		spine_log(context, LOG_INFO, "disconnecting yap audio source '%s'", context->audio_input_name);
 		obs_source_remove_audio_capture_callback(context->audio_input, audio_captured, context);
 		obs_source_release(context->audio_input);
 		context->audio_input = NULL;
@@ -274,9 +318,12 @@ static void connect_audio_source(struct spine_source *context, const char *name)
 		return;
 
 	obs_source_t *source = obs_get_source_by_name(name);
-	if (!source)
+	if (!source) {
+		spine_log(context, LOG_WARNING, "yap audio source '%s' was not found", name);
 		return;
+	}
 	if (source == context->source || !(obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO)) {
+		spine_log(context, LOG_WARNING, "source '%s' cannot provide audio for yap mode", name);
 		obs_source_release(source);
 		return;
 	}
@@ -284,6 +331,22 @@ static void connect_audio_source(struct spine_source *context, const char *name)
 	context->audio_input = source;
 	context->audio_input_name = bstrdup(name);
 	obs_source_add_audio_capture_callback(context->audio_input, audio_captured, context);
+	spine_log(context, LOG_INFO, "connected yap mode to audio source '%s'", name);
+}
+
+static void log_asset_file(struct spine_source *context, const char *label, const char *path)
+{
+	if (!path || !*path) {
+		spine_log(context, LOG_WARNING, "%s file is not configured", label);
+		return;
+	}
+	if (!os_file_exists(path)) {
+		spine_log(context, LOG_ERROR, "%s file does not exist or is inaccessible: %s", label, path);
+		return;
+	}
+
+	const int64_t size = os_get_file_size(path);
+	spine_log(context, LOG_INFO, "%s file is readable (%lld bytes): %s", label, (long long)size, path);
 }
 
 static void *spine_source_create(obs_data_t *settings, obs_source_t *source)
@@ -296,7 +359,8 @@ static void *spine_source_create(obs_data_t *settings, obs_source_t *source)
 	level_gate_reset(&context->gate);
 	context->width = (uint32_t)obs_data_get_int(settings, SETTING_WIDTH);
 	context->height = (uint32_t)obs_data_get_int(settings, SETTING_HEIGHT);
-	context->browser = create_browser_source(context->width, context->height);
+	spine_log(context, LOG_INFO, "creating source with a %ux%u canvas", context->width, context->height);
+	context->browser = create_browser_source(context, context->width, context->height);
 	register_hotkeys(context);
 	spine_source_update(context, settings);
 	return context;
@@ -308,6 +372,7 @@ static void spine_source_destroy(void *data)
 	if (!context)
 		return;
 
+	spine_log(context, LOG_INFO, "destroying source");
 	disconnect_audio_source(context);
 	unregister_hotkeys(context);
 	if (context->browser)
@@ -329,6 +394,17 @@ static void spine_source_update(void *data, obs_data_t *settings)
 	context->yap_enabled = obs_data_get_bool(settings, SETTING_YAP_ENABLED);
 	context->state_enabled = obs_data_get_bool(settings, SETTING_STATE_ENABLED);
 	context->hotkeys_enabled = obs_data_get_bool(settings, SETTING_HOTKEYS_ENABLED);
+	const char *core_path = obs_data_get_string(settings, SETTING_CORE_PATH);
+	const char *atlas_path = obs_data_get_string(settings, SETTING_ATLAS_PATH);
+	const char *runtime = obs_data_get_string(settings, SETTING_RUNTIME);
+	const char *default_animation = obs_data_get_string(settings, SETTING_DEFAULT_ANIMATION);
+	spine_log(context, LOG_INFO,
+		  "configuration updated: runtime=%s, default animation=%s, canvas=%ux%u, yap=%s, states=%s, hotkeys=%s",
+		  runtime && *runtime ? runtime : "auto", default_animation && *default_animation ? default_animation : "idle",
+		  context->width, context->height, context->yap_enabled ? "on" : "off",
+		  context->state_enabled ? "on" : "off", context->hotkeys_enabled ? "on" : "off");
+	log_asset_file(context, "skeleton", core_path);
+	log_asset_file(context, "atlas", atlas_path);
 	connect_audio_source(context, obs_data_get_string(settings, SETTING_YAP_AUDIO_SOURCE));
 	if (!context->yap_enabled) {
 		level_gate_reset(&context->gate);
@@ -373,8 +449,13 @@ static void spine_source_tick(void *data, float seconds)
 static void spine_source_render(void *data, gs_effect_t *effect)
 {
 	struct spine_source *context = data;
-	if (context && context->browser)
+	if (context && context->browser) {
+		if (!context->first_render_logged) {
+			spine_log(context, LOG_INFO, "rendering the private Browser Source for the first time");
+			context->first_render_logged = true;
+		}
 		obs_source_video_render(context->browser);
+	}
 	UNUSED_PARAMETER(effect);
 }
 

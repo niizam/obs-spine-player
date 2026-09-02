@@ -48,6 +48,10 @@ Generate or refresh a binary catalog from the asset itself with `node tools/gene
 
 Character assets are intentionally excluded from version control. A local `characters/` directory is ignored by Git and installed when present, but published source packages contain no character skeletons, atlases, textures, or animation catalogs.
 
+## Troubleshooting
+
+Open **Help → Log Files → View Current Log** in OBS and search for `[OBS Spine Player` and `[obs-browser: 'OBS Spine Player Renderer']`. The plugin logs its installed binary/data locations, source dimensions, selected runtime and animation, asset paths and readability, Browser Source creation, first render, runtime detection, asset fetch results, and the final animation catalog. Browser exceptions and Spine loading failures are emitted as errors instead of only appearing inside the source canvas.
+
 ## Maintenance
 
 See [Architecture](docs/architecture.md) for component boundaries, the supplied-reference findings, and the extension path for future ASR/STT or speech-based emotion inputs. Third-party runtime licensing is recorded in [Third-party notices](THIRD_PARTY_NOTICES.md).

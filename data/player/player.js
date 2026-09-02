@@ -13,6 +13,29 @@
   let assetFingerprint = null;
   let configureGeneration = 0;
   let latestConfiguration = {};
+  let lastDiagnosticFingerprint = null;
+  let lastErrorMessage = null;
+
+  function errorText(error) {
+    if (error && error.stack) return String(error.stack);
+    if (error && error.message) return String(error.message);
+    return String(error);
+  }
+
+  function log(level, message) {
+    const method = typeof console[level] === 'function' ? console[level] : console.log;
+    method.call(console, `[OBS Spine Player] ${message}`);
+  }
+
+  function reportError(summary, error) {
+    const detail = errorText(error);
+    const message = `${summary}: ${detail}`;
+    showStatus(`${summary}:\n${detail}`);
+    if (message !== lastErrorMessage) {
+      log('error', message);
+      lastErrorMessage = message;
+    }
+  }
 
   function showStatus(message) {
     status.textContent = message;
@@ -23,24 +46,41 @@
     status.classList.remove('visible');
   }
 
-  async function detectRuntime(coreUrl) {
-    const response = await fetch(coreUrl);
-    if (!response.ok) throw new Error(`Could not read skeleton (${response.status})`);
-    if (SpinePlayerOptions.extension(coreUrl) === 'json') {
-      return SpineVersionDetector.runtimeFamily(SpineVersionDetector.fromJson(await response.text()));
+  async function fetchAsset(url, label) {
+    let response;
+    try {
+      response = await fetch(url);
+    } catch (error) {
+      throw new Error(`${label} request failed for ${url}: ${errorText(error)}`);
     }
-    return SpineVersionDetector.runtimeFamily(SpineVersionDetector.fromBinary(await response.arrayBuffer()));
+    if (!response.ok) throw new Error(`${label} request returned HTTP ${response.status} for ${url}`);
+    return response;
+  }
+
+  async function detectRuntime(coreUrl, shouldLog) {
+    const response = await fetchAsset(coreUrl, 'Skeleton');
+    let version;
+    if (SpinePlayerOptions.extension(coreUrl) === 'json') {
+      version = SpineVersionDetector.fromJson(await response.text());
+    } else {
+      version = SpineVersionDetector.fromBinary(await response.arrayBuffer());
+    }
+    const family = SpineVersionDetector.runtimeFamily(version);
+    if (shouldLog) log('info', `Detected Spine ${version}; using the bundled ${family} runtime`);
+    return family;
   }
 
   function loadRuntime(family) {
     if (loadedRuntime === family && window.spine) return Promise.resolve();
     if (loadedRuntime && loadedRuntime !== family) {
+      log('info', `Runtime changed from ${loadedRuntime} to ${family}; reloading the browser page`);
       location.reload();
       return new Promise(function () {});
     }
     if (runtimePromise) return runtimePromise;
 
     runtimePromise = new Promise(function (resolve, reject) {
+      log('info', `Loading bundled Spine ${family} runtime from ${runtimeFiles[family]}`);
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
       stylesheet.href = runtimeFiles[family].replace('.js', '.css');
@@ -50,6 +90,7 @@
       script.src = runtimeFiles[family];
       script.onload = function () {
         loadedRuntime = family;
+        log('info', `Bundled Spine ${family} runtime loaded successfully`);
         resolve();
       };
       script.onerror = function () {
@@ -78,8 +119,17 @@
     const generation = ++configureGeneration;
     const coreUrl = SpineAssetUrl.fromPath(configuration.corePath);
     const atlasUrl = SpineAssetUrl.fromPath(configuration.atlasPath);
+    const diagnosticFingerprint = JSON.stringify([
+      configuration.corePath,
+      configuration.atlasPath,
+      configuration.runtime,
+      configuration.defaultAnimation
+    ]);
+    const shouldLogAttempt = diagnosticFingerprint !== lastDiagnosticFingerprint;
+    lastDiagnosticFingerprint = diagnosticFingerprint;
     if (!coreUrl || !atlasUrl) {
       showStatus('Choose both a Spine skeleton and atlas file in Source Properties.');
+      if (shouldLogAttempt) log('warn', 'Waiting for both a skeleton file and an atlas file');
       return;
     }
 
@@ -90,8 +140,24 @@
     }
 
     try {
-      const family = configuration.runtime === 'auto' ? await detectRuntime(coreUrl) : configuration.runtime;
+      if (shouldLogAttempt) {
+        log(
+          'info',
+          `Configuring character: runtime=${configuration.runtime || 'auto'}, animation=${
+            configuration.defaultAnimation || 'idle'
+          }, skeleton=${coreUrl}, atlas=${atlasUrl}`
+        );
+      }
+      const family =
+        configuration.runtime === 'auto' ? await detectRuntime(coreUrl, shouldLogAttempt) : configuration.runtime;
       if (!runtimeFiles[family]) throw new Error(`Unsupported Spine runtime selection: ${family}`);
+      const atlasResponse = await fetchAsset(atlasUrl, 'Atlas');
+      await atlasResponse.text();
+      if (configuration.runtime !== 'auto') {
+        const skeletonResponse = await fetchAsset(coreUrl, 'Skeleton');
+        await skeletonResponse.arrayBuffer();
+      }
+      if (shouldLogAttempt) log('info', 'Skeleton and atlas files are readable by OBS Browser');
       await loadRuntime(family);
       if (generation !== configureGeneration) return;
 
@@ -111,13 +177,26 @@
           const animations = availableAnimations(loadedPlayer);
           controller = new SpineStateController(loadedPlayer, animations, latestConfiguration);
           applyControlConfiguration(latestConfiguration);
+          lastErrorMessage = null;
+          log('info', `Character loaded with ${animations.length} animations: ${animations.join(', ')}`);
+          const defaultAnimation = latestConfiguration.defaultAnimation || 'idle';
+          if (!animations.includes(defaultAnimation)) {
+            log('warn', `Configured default animation '${defaultAnimation}' is not present in the loaded skeleton`);
+          }
+          const canvas = container.querySelector('canvas');
+          log(
+            'info',
+            `Render surface: container=${container.clientWidth}x${container.clientHeight}, canvas=${
+              canvas ? `${canvas.width}x${canvas.height}` : 'missing'
+            }`
+          );
           hideStatus();
         },
         error: function (failedPlayer, message) {
           if (player !== failedPlayer) return;
           assetFingerprint = null;
           player = null;
-          showStatus(`Could not load Spine character:\n${String(message)}`);
+          reportError('Could not load Spine character', message);
         }
       });
       player = new spine.SpinePlayer(container, options);
@@ -125,10 +204,19 @@
       if (generation === configureGeneration) {
         assetFingerprint = null;
         player = null;
-        showStatus(`Could not configure Spine character:\n${error.message || error}`);
+        reportError('Could not configure Spine character', error);
       }
     }
   }
+
+  window.addEventListener('error', function (event) {
+    const location = event.filename ? ` (${event.filename}:${event.lineno || 0})` : '';
+    log('error', `Unhandled browser error${location}: ${event.message || 'unknown error'}`);
+  });
+
+  window.addEventListener('unhandledrejection', function (event) {
+    log('error', `Unhandled browser promise rejection: ${errorText(event.reason)}`);
+  });
 
   window.addEventListener('obsSpineConfigure', function (event) {
     configure(event.detail || {});
@@ -146,4 +234,6 @@
   window.addEventListener('obsSpineReset', function () {
     if (controller) controller.reset();
   });
+
+  log('info', `Player page initialized at ${location.href}`);
 })();
