@@ -15,12 +15,23 @@ target_sources(
     src/animation-catalog.h
     src/browser-bridge.c
     src/browser-bridge.h
+    src/cursor-input.c
+    src/cursor-input.h
     src/level-gate.c
     src/level-gate.h
     src/spine-source.c
     src/spine-source.h
 )
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs)
+if(WIN32)
+  target_link_libraries(obs-spine-player PRIVATE user32)
+elseif(APPLE)
+  find_library(CORE_GRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
+  target_link_libraries(obs-spine-player PRIVATE "${CORE_GRAPHICS_FRAMEWORK}")
+elseif(UNIX)
+  find_package(X11 REQUIRED)
+  target_link_libraries(obs-spine-player PRIVATE X11::X11)
+endif()
 if(UNIX)
   target_link_libraries(obs-spine-player PRIVATE m)
 endif()

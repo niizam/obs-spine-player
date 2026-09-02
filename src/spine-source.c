@@ -2,6 +2,7 @@
 
 #include "animation-catalog.h"
 #include "browser-bridge.h"
+#include "cursor-input.h"
 #include "level-gate.h"
 
 #include <math.h>
@@ -23,10 +24,19 @@
 #define SETTING_YAP_ATTACK "yap_attack_ms"
 #define SETTING_YAP_RELEASE "yap_release_ms"
 #define SETTING_YAP_ANIMATION "yap_animation"
+#define SETTING_EYE_TRACKING_ENABLED "eye_tracking_enabled"
+#define SETTING_EYE_LEFT_SLOTS "eye_left_slots"
+#define SETTING_EYE_RIGHT_SLOTS "eye_right_slots"
+#define SETTING_EYE_MAX_X "eye_max_x"
+#define SETTING_EYE_MAX_Y "eye_max_y"
+#define SETTING_EYE_SMOOTHING "eye_smoothing_ms"
 #define SETTING_STATE_ENABLED "state_enabled"
 #define SETTING_HOTKEYS_ENABLED "hotkeys_enabled"
 #define EMOTION_COUNT 8
 #define PEAK_SCALE 1000000L
+#define CURSOR_SAMPLE_INTERVAL (1.0f / 30.0f)
+#define DEFAULT_LEFT_EYE_SLOTS "f_eye_id_l,f_eye_hi_l3,f_eye_hi_l2"
+#define DEFAULT_RIGHT_EYE_SLOTS "f_eye_id_r,f_eye_hi_r3,f_eye_hi_r2"
 
 struct spine_source;
 
@@ -47,14 +57,19 @@ struct spine_source {
 	float threshold_db;
 	float attack_ms;
 	float release_ms;
+	float cursor_timer;
 	volatile long pending_peak;
 	struct level_gate gate;
+	struct cursor_input cursor_input;
 	bool yap_enabled;
+	bool eye_tracking_enabled;
 	bool state_enabled;
 	bool hotkeys_enabled;
 	bool bridge_ready_logged;
 	bool bridge_failure_logged;
 	bool first_render_logged;
+	bool cursor_ready_logged;
+	bool cursor_failure_logged;
 	struct emotion_hotkey emotion_hotkeys[EMOTION_COUNT];
 	obs_hotkey_id reset_hotkey;
 };
@@ -163,6 +178,15 @@ static void send_yap_state(struct spine_source *context)
 	obs_data_release(payload);
 }
 
+static void send_cursor_position(struct spine_source *context, const struct cursor_position *position)
+{
+	obs_data_t *payload = obs_data_create();
+	obs_data_set_double(payload, "x", position->x);
+	obs_data_set_double(payload, "y", position->y);
+	send_browser_event(context, "obsSpineCursor", payload);
+	obs_data_release(payload);
+}
+
 static void send_configuration(struct spine_source *context)
 {
 	if (!context->browser)
@@ -177,6 +201,12 @@ static void send_configuration(struct spine_source *context)
 	obs_data_set_string(payload, "yapAnimation", obs_data_get_string(settings, SETTING_YAP_ANIMATION));
 	obs_data_set_bool(payload, "yapEnabled", context->yap_enabled);
 	obs_data_set_bool(payload, "yapActive", context->yap_enabled && context->gate.active);
+	obs_data_set_bool(payload, "eyeTrackingEnabled", context->eye_tracking_enabled);
+	obs_data_set_string(payload, "eyeLeftSlots", obs_data_get_string(settings, SETTING_EYE_LEFT_SLOTS));
+	obs_data_set_string(payload, "eyeRightSlots", obs_data_get_string(settings, SETTING_EYE_RIGHT_SLOTS));
+	obs_data_set_double(payload, "eyeMaxX", obs_data_get_double(settings, SETTING_EYE_MAX_X));
+	obs_data_set_double(payload, "eyeMaxY", obs_data_get_double(settings, SETTING_EYE_MAX_Y));
+	obs_data_set_double(payload, "eyeSmoothingMs", obs_data_get_double(settings, SETTING_EYE_SMOOTHING));
 	obs_data_set_bool(payload, "stateEnabled", context->state_enabled);
 	obs_data_set_bool(payload, "hotkeysEnabled", context->hotkeys_enabled);
 	obs_data_set_int(payload, "width", context->width);
@@ -357,6 +387,7 @@ static void *spine_source_create(obs_data_t *settings, obs_source_t *source)
 	for (size_t index = 0; index < EMOTION_COUNT; index++)
 		context->emotion_hotkeys[index].id = OBS_INVALID_HOTKEY_ID;
 	level_gate_reset(&context->gate);
+	cursor_input_init(&context->cursor_input);
 	context->width = (uint32_t)obs_data_get_int(settings, SETTING_WIDTH);
 	context->height = (uint32_t)obs_data_get_int(settings, SETTING_HEIGHT);
 	spine_log(context, LOG_INFO, "creating source with a %ux%u canvas", context->width, context->height);
@@ -374,6 +405,7 @@ static void spine_source_destroy(void *data)
 
 	spine_log(context, LOG_INFO, "destroying source");
 	disconnect_audio_source(context);
+	cursor_input_destroy(&context->cursor_input);
 	unregister_hotkeys(context);
 	if (context->browser)
 		obs_source_release(context->browser);
@@ -392,6 +424,7 @@ static void spine_source_update(void *data, obs_data_t *settings)
 	context->attack_ms = (float)obs_data_get_double(settings, SETTING_YAP_ATTACK);
 	context->release_ms = (float)obs_data_get_double(settings, SETTING_YAP_RELEASE);
 	context->yap_enabled = obs_data_get_bool(settings, SETTING_YAP_ENABLED);
+	context->eye_tracking_enabled = obs_data_get_bool(settings, SETTING_EYE_TRACKING_ENABLED);
 	context->state_enabled = obs_data_get_bool(settings, SETTING_STATE_ENABLED);
 	context->hotkeys_enabled = obs_data_get_bool(settings, SETTING_HOTKEYS_ENABLED);
 	const char *core_path = obs_data_get_string(settings, SETTING_CORE_PATH);
@@ -399,10 +432,13 @@ static void spine_source_update(void *data, obs_data_t *settings)
 	const char *runtime = obs_data_get_string(settings, SETTING_RUNTIME);
 	const char *default_animation = obs_data_get_string(settings, SETTING_DEFAULT_ANIMATION);
 	spine_log(context, LOG_INFO,
-		  "configuration updated: runtime=%s, default animation=%s, canvas=%ux%u, yap=%s, states=%s, hotkeys=%s",
+		  "configuration updated: runtime=%s, default animation=%s, canvas=%ux%u, yap=%s, eye tracking=%s, states=%s, hotkeys=%s",
 		  runtime && *runtime ? runtime : "auto", default_animation && *default_animation ? default_animation : "idle",
 		  context->width, context->height, context->yap_enabled ? "on" : "off",
+		  context->eye_tracking_enabled ? "on" : "off",
 		  context->state_enabled ? "on" : "off", context->hotkeys_enabled ? "on" : "off");
+	if (context->eye_tracking_enabled)
+		spine_log(context, LOG_INFO, "cursor eye tracking uses the %s backend", cursor_input_backend());
 	log_asset_file(context, "skeleton", core_path);
 	log_asset_file(context, "atlas", atlas_path);
 	connect_audio_source(context, obs_data_get_string(settings, SETTING_YAP_AUDIO_SOURCE));
@@ -410,6 +446,8 @@ static void spine_source_update(void *data, obs_data_t *settings)
 		level_gate_reset(&context->gate);
 		send_yap_state(context);
 	}
+	if (!context->eye_tracking_enabled)
+		context->cursor_timer = 0.0f;
 	context->configuration_timer = 1.0f;
 	update_browser_dimensions(context);
 	send_configuration(context);
@@ -438,6 +476,26 @@ static void spine_source_tick(void *data, float seconds)
 	if (level_gate_update(&context->gate, level, seconds, context->threshold_db, context->attack_ms,
 			      context->release_ms))
 		send_yap_state(context);
+
+	if (context->eye_tracking_enabled) {
+		context->cursor_timer += seconds;
+		if (context->cursor_timer >= CURSOR_SAMPLE_INTERVAL) {
+			context->cursor_timer = fmodf(context->cursor_timer, CURSOR_SAMPLE_INTERVAL);
+			struct cursor_position position;
+			if (cursor_input_sample(&context->cursor_input, &position)) {
+				send_cursor_position(context, &position);
+				if (!context->cursor_ready_logged || context->cursor_failure_logged)
+					spine_log(context, LOG_INFO, "desktop cursor tracking is active");
+				context->cursor_ready_logged = true;
+				context->cursor_failure_logged = false;
+			} else if (!context->cursor_failure_logged) {
+				spine_log(context, LOG_WARNING,
+					  "desktop cursor position is unavailable through %s; native Wayland sessions may block global cursor access",
+					  cursor_input_backend());
+				context->cursor_failure_logged = true;
+			}
+		}
+	}
 
 	context->configuration_timer += seconds;
 	if (context->configuration_timer >= 1.0f) {
@@ -490,6 +548,12 @@ static void spine_source_defaults(obs_data_t *settings)
 	obs_data_set_default_double(settings, SETTING_YAP_ATTACK, 25.0);
 	obs_data_set_default_double(settings, SETTING_YAP_RELEASE, 180.0);
 	obs_data_set_default_string(settings, SETTING_YAP_ANIMATION, "talk_start");
+	obs_data_set_default_bool(settings, SETTING_EYE_TRACKING_ENABLED, false);
+	obs_data_set_default_string(settings, SETTING_EYE_LEFT_SLOTS, DEFAULT_LEFT_EYE_SLOTS);
+	obs_data_set_default_string(settings, SETTING_EYE_RIGHT_SLOTS, DEFAULT_RIGHT_EYE_SLOTS);
+	obs_data_set_default_double(settings, SETTING_EYE_MAX_X, 6.0);
+	obs_data_set_default_double(settings, SETTING_EYE_MAX_Y, 4.0);
+	obs_data_set_default_double(settings, SETTING_EYE_SMOOTHING, 90.0);
 	obs_data_set_default_bool(settings, SETTING_STATE_ENABLED, true);
 	obs_data_set_default_bool(settings, SETTING_HOTKEYS_ENABLED, true);
 	for (size_t index = 0; index < EMOTION_COUNT; index++) {
@@ -541,6 +605,18 @@ static bool state_enabled_modified(obs_properties_t *properties, obs_property_t 
 		obs_property_set_visible(obs_properties_get(properties, animation_key), visible);
 		obs_property_set_visible(obs_properties_get(properties, loop_key), visible);
 	}
+	UNUSED_PARAMETER(property);
+	return true;
+}
+
+static bool eye_tracking_enabled_modified(obs_properties_t *properties, obs_property_t *property,
+					  obs_data_t *settings)
+{
+	const bool visible = obs_data_get_bool(settings, SETTING_EYE_TRACKING_ENABLED);
+	const char *controlled[] = {SETTING_EYE_LEFT_SLOTS, SETTING_EYE_RIGHT_SLOTS, SETTING_EYE_MAX_X,
+				    SETTING_EYE_MAX_Y, SETTING_EYE_SMOOTHING};
+	for (size_t index = 0; index < sizeof(controlled) / sizeof(controlled[0]); index++)
+		obs_property_set_visible(obs_properties_get(properties, controlled[index]), visible);
 	UNUSED_PARAMETER(property);
 	return true;
 }
@@ -627,6 +703,20 @@ static obs_properties_t *spine_source_properties(void *data)
 	obs_properties_add_float(properties, SETTING_YAP_RELEASE, obs_module_text("YapRelease"), 0.0, 2000.0, 10.0);
 	obs_properties_add_list(properties, SETTING_YAP_ANIMATION, obs_module_text("YapAnimation"),
 				OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
+
+	obs_property_t *eye_tracking_enabled =
+		obs_properties_add_bool(properties, SETTING_EYE_TRACKING_ENABLED, obs_module_text("EyeTrackingEnabled"));
+	obs_property_set_modified_callback(eye_tracking_enabled, eye_tracking_enabled_modified);
+	obs_property_t *left_eye_slots = obs_properties_add_text(properties, SETTING_EYE_LEFT_SLOTS,
+							 obs_module_text("EyeLeftSlots"), OBS_TEXT_DEFAULT);
+	obs_property_set_long_description(left_eye_slots, obs_module_text("EyeSlotsHelp"));
+	obs_property_t *right_eye_slots = obs_properties_add_text(properties, SETTING_EYE_RIGHT_SLOTS,
+							  obs_module_text("EyeRightSlots"), OBS_TEXT_DEFAULT);
+	obs_property_set_long_description(right_eye_slots, obs_module_text("EyeSlotsHelp"));
+	obs_properties_add_float_slider(properties, SETTING_EYE_MAX_X, obs_module_text("EyeMaxX"), 0.0, 100.0, 0.5);
+	obs_properties_add_float_slider(properties, SETTING_EYE_MAX_Y, obs_module_text("EyeMaxY"), 0.0, 100.0, 0.5);
+	obs_properties_add_float(properties, SETTING_EYE_SMOOTHING, obs_module_text("EyeSmoothing"), 0.0, 2000.0,
+				  10.0);
 
 	obs_property_t *state_enabled =
 		obs_properties_add_bool(properties, SETTING_STATE_ENABLED, obs_module_text("StateEnabled"));
