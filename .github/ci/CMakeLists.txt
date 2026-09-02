@@ -4,6 +4,7 @@ if(NOT OBS_PLUGIN_TEMPLATE_DIR)
   message(FATAL_ERROR "OBS_PLUGIN_TEMPLATE_DIR must point to an obs-plugintemplate checkout")
 endif()
 
+file(TO_CMAKE_PATH "${OBS_PLUGIN_TEMPLATE_DIR}" OBS_PLUGIN_TEMPLATE_DIR)
 list(APPEND CMAKE_MODULE_PATH "${OBS_PLUGIN_TEMPLATE_DIR}/cmake/common")
 include("${OBS_PLUGIN_TEMPLATE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
 

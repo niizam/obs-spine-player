@@ -20,10 +20,10 @@ jobs:
 
     steps:
       - name: Check out plugin
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check out OBS plugin build support
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: obsproject/obs-plugintemplate
           ref: ${{ env.OBS_PLUGIN_TEMPLATE_REF }}
@@ -33,7 +33,12 @@ jobs:
         run: |
           sudo add-apt-repository --yes ppa:obsproject/obs-studio
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ninja-build obs-studio
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            libgles2-mesa-dev \
+            libsimde-dev \
+            ninja-build \
+            obs-studio
 
       - name: Configure
         run: >-
@@ -55,7 +60,7 @@ jobs:
         run: tar -C package -czf obs-spine-player-linux-x86_64.tar.gz .
 
       - name: Upload plugin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: obs-spine-player-linux-x86_64
           path: obs-spine-player-linux-x86_64.tar.gz
