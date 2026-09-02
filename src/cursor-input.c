@@ -51,7 +51,7 @@ const char *cursor_input_backend(void)
 
 #elif defined(__APPLE__)
 
-#include <ApplicationServices/ApplicationServices.h>
+#include <CoreGraphics/CoreGraphics.h>
 
 void cursor_input_destroy(struct cursor_input *input)
 {
