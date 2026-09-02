@@ -438,7 +438,8 @@ static void spine_source_update(void *data, obs_data_t *settings)
 		  context->eye_tracking_enabled ? "on" : "off",
 		  context->state_enabled ? "on" : "off", context->hotkeys_enabled ? "on" : "off");
 	if (context->eye_tracking_enabled)
-		spine_log(context, LOG_INFO, "cursor eye tracking uses the %s backend", cursor_input_backend());
+		spine_log(context, LOG_INFO, "cursor eye tracking uses the %s backend",
+			  cursor_input_backend(&context->cursor_input));
 	log_asset_file(context, "skeleton", core_path);
 	log_asset_file(context, "atlas", atlas_path);
 	connect_audio_source(context, obs_data_get_string(settings, SETTING_YAP_AUDIO_SOURCE));
@@ -491,7 +492,7 @@ static void spine_source_tick(void *data, float seconds)
 			} else if (!context->cursor_failure_logged) {
 				spine_log(context, LOG_WARNING,
 					  "desktop cursor position is unavailable through %s; native Wayland sessions may block global cursor access",
-					  cursor_input_backend());
+					  cursor_input_backend(&context->cursor_input));
 				context->cursor_failure_logged = true;
 			}
 		}

@@ -17,7 +17,7 @@ This boundary keeps OBS-specific lifetime and audio threading out of the player,
 
 - `src/spine-source.c` registers the source, owns the private `browser_source`, exposes properties/hotkeys, subscribes to a selected audio source, and emits normalized control events.
 - `src/level-gate.c` converts an amplitude stream into a stable open/closed signal. It contains no OBS or speech-specific behavior.
-- `src/cursor-input.c` is a platform adapter that samples and normalizes the global desktop cursor. It uses the Windows virtual desktop, macOS display coordinates, or X11 without coupling platform APIs to the Spine renderer.
+- `src/cursor-input.c` is a platform adapter that samples and normalizes the global desktop cursor. It uses the Windows virtual desktop, macOS display coordinates, Hyprland's native command socket, or X11 without coupling platform APIs to the Spine renderer.
 - `src/browser-bridge.c` is the only native dependency on the OBS Browser `javascript_event` procedure.
 - `src/animation-catalog.c` discovers JSON animation keys and reads adjacent `.animations.txt` catalogs for binary exports. OBS properties use one shared catalog to populate editable dropdowns, preserving unknown values from existing scenes.
 - `tools/generate-animation-catalog.js` uses the matching bundled Spine runtime to parse a binary skeleton and write its catalog. This keeps full version-specific binary parsing out of the native plugin while making bundled catalogs reproducible.
@@ -46,7 +46,7 @@ OBS invokes the audio capture callback on its audio path. That callback calculat
 
 The video tick consumes the pending peak, advances the attack/release gate, and emits a browser event only when the boolean yap state changes. This avoids flooding CEF and gives a future audio feature a clear real-time-safe boundary.
 
-Desktop cursor input is sampled from the video tick at 30 Hz and sent as normalized `[-1, 1]` coordinates. Browser-side exponential smoothing bridges those samples at render rate. Native Wayland intentionally does not expose global cursor coordinates; X11/XWayland availability determines Linux support, and a failed backend is logged once rather than retried noisily.
+Desktop cursor input is sampled from the video tick at 30 Hz and sent as normalized `[-1, 1]` coordinates. Browser-side exponential smoothing bridges those samples at render rate. Hyprland sessions use the compositor command socket and monitor layout directly because XWayland exposes a frozen or restricted pointer. Other native Wayland compositors require their own explicit adapter; X11 remains the generic Linux fallback, and a failed backend is logged once rather than retried noisily.
 
 ## Character assets
 

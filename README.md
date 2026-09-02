@@ -54,7 +54,7 @@ Enable **Cursor eye tracking** in Source Properties to move eye attachments towa
 
 Those slots resolve to two controlling bones in the supplied rig, so the pupil, iris, and highlight layers stay together. For another character, enter comma-separated slot names for each eye. **Horizontal eye travel**, **Vertical eye travel**, and **Eye smoothing** control the range and response; the default `6`, `4`, and `90 ms` values are a conservative starting point.
 
-Windows uses the virtual desktop cursor. Linux uses X11; a native Wayland session may deny global cursor coordinates by design, in which case OBS logs a warning and the eyes remain centered. No camera, face tracking, or speech recognition is involved.
+Windows uses the virtual desktop cursor. Linux uses direct Hyprland IPC when available and falls back to X11. Other native Wayland compositors may deny global cursor coordinates by design, in which case OBS logs a warning and the eyes remain centered. No camera, face tracking, or speech recognition is involved.
 
 Animation names are read directly from Spine JSON exports. Binary `.skel` exports use an adjacent catalog with the same base name and an `.animations.txt` suffix, one animation name per line. Dropdowns remain editable so an existing scene or an uncatalogued binary export is never blocked.
 
