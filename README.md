@@ -32,6 +32,8 @@ sudo cmake --install build --prefix /usr
 
 Restart OBS after installation. Linux is the locally verified build target. The CMake install destinations also cover conventional Windows and macOS OBS plugin layouts when built inside an OBS plugin development environment.
 
+On Arch Linux, `makepkg -Csi` builds the checked-out Git branch. The `PKGBUILD` redirects makepkg's internal `src/` and `pkg/` work directories so `--cleanbuild` cannot collide with this repository's tracked `src/` directory. Set `OBS_SPINE_PLAYER_BRANCH=main` to package `main` explicitly while another branch is checked out.
+
 GitHub Actions builds Linux x86_64 and Windows x64 packages on pushes to `main`, pull requests, and manual workflow dispatches. Download them from the `Build Plugin Linux` or `Build Plugin Windows` workflow run's artifacts. The Windows artifact contains both a portable ZIP and an unsigned Inno Setup installer; select the OBS Studio installation folder when installing to a non-default location.
 
 ## Use

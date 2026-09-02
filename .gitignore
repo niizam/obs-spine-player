@@ -4,6 +4,12 @@
 /characters/
 /.github/ci/cmake/
 /.cache/
+/.makepkg/
+/obs-spine-player/
+/pkg/
+/src/build/
+/src/obs-spine-player/
+/*.pkg.tar.*
 compile_commands.json
 *.swp
 *~
