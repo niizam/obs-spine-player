@@ -1,0 +1,63 @@
+name: Build Plugin Linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BUILD_TYPE: RelWithDebInfo
+  OBS_PLUGIN_TEMPLATE_REF: 3e7d7ac3b5342cd7d9b88890b9c70b472d1520fc
+
+jobs:
+  build:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out plugin
+        uses: actions/checkout@v4
+
+      - name: Check out OBS plugin build support
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-plugintemplate
+          ref: ${{ env.OBS_PLUGIN_TEMPLATE_REF }}
+          path: _obs_plugin_template
+
+      - name: Install build dependencies
+        run: |
+          sudo add-apt-repository --yes ppa:obsproject/obs-studio
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ninja-build obs-studio
+
+      - name: Configure
+        run: >-
+          cmake -S .github/ci -B build-ci -G Ninja
+          -DOBS_PLUGIN_TEMPLATE_DIR="${GITHUB_WORKSPACE}/_obs_plugin_template"
+          -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+          -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+
+      - name: Build
+        run: cmake --build build-ci --parallel
+
+      - name: Test
+        run: ctest --test-dir build-ci --build-config "${BUILD_TYPE}" --output-on-failure
+
+      - name: Install
+        run: cmake --install build-ci --prefix "${GITHUB_WORKSPACE}/package"
+
+      - name: Package
+        run: tar -C package -czf obs-spine-player-linux-x86_64.tar.gz .
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-spine-player-linux-x86_64
+          path: obs-spine-player-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 14

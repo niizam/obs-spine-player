@@ -2,6 +2,7 @@
 /dist/
 /references/
 /characters/
+/.github/ci/cmake/
 /.cache/
 compile_commands.json
 *.swp

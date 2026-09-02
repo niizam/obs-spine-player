@@ -31,6 +31,8 @@ sudo cmake --install build --prefix /usr
 
 Restart OBS after installation. Linux is the locally verified build target. The CMake install destinations also cover conventional Windows and macOS OBS plugin layouts when built inside an OBS plugin development environment.
 
+GitHub Actions builds Linux x86_64 and Windows x64 packages on pushes to `main`, pull requests, and manual workflow dispatches. Download them from the `Build Plugin Linux` or `Build Plugin Windows` workflow run's artifacts. The Windows artifact contains both a portable ZIP and an unsigned Inno Setup installer; select the OBS Studio installation folder when installing to a non-default location.
+
 ## Use
 
 1. Add a **Spine Character** source and choose its `.skel` or `.json` file and `.atlas` file. Atlas image pages must remain at paths referenced by the atlas.
