@@ -87,9 +87,8 @@ static char *sidecar_path(const char *skeleton_path)
 	if (!slash || (backslash && backslash > slash))
 		slash = backslash;
 	char *dot = strrchr(slash ? slash + 1 : path, '.');
-	if (dot)
-		*dot = '\0';
-	strcat(path, CATALOG_SUFFIX);
+	char *suffix_position = dot ? dot : path + length;
+	memcpy(suffix_position, CATALOG_SUFFIX, sizeof(CATALOG_SUFFIX));
 	return path;
 }
 
