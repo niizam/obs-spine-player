@@ -3,6 +3,7 @@
 /references/
 /characters/
 /.github/ci/cmake/
+/.github/ci/.deps/
 /.cache/
 /.makepkg/
 /obs-spine-player/

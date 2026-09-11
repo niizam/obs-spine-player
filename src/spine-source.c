@@ -111,6 +111,17 @@ static obs_source_t *create_browser_source(struct spine_source *context, uint32_
 		spine_log(context, LOG_ERROR, "player/index.html is missing from the plugin data directory");
 		return NULL;
 	}
+	/* OBS can return a relative module path on Windows. Browser Source
+	 * prefixes local_file with http://absolute/, so URL normalization would
+	 * discard ../ segments before its local-file handler sees the path. */
+	char *absolute_path = os_get_abs_path_ptr(player_path);
+	if (!absolute_path) {
+		spine_log(context, LOG_ERROR, "could not resolve browser page to an absolute path: %s", player_path);
+		bfree(player_path);
+		return NULL;
+	}
+	bfree(player_path);
+	player_path = absolute_path;
 	if (!os_file_exists(player_path)) {
 		spine_log(context, LOG_ERROR, "browser page does not exist: %s", player_path);
 		bfree(player_path);
