@@ -10,6 +10,7 @@
   let runtimePromise = null;
   let player = null;
   let controller = null;
+  let eyeTracker = null;
   let assetFingerprint = null;
   let configureGeneration = 0;
   let latestConfiguration = {};
@@ -112,6 +113,7 @@
     if (!controller) return;
     controller.configure(configuration);
     controller.setYapping(Boolean(configuration.yapEnabled && configuration.yapActive));
+    if (eyeTracker) eyeTracker.configure(configuration);
   }
 
   async function configure(configuration) {
@@ -162,6 +164,10 @@
       if (generation !== configureGeneration) return;
 
       assetFingerprint = fingerprint;
+      if (eyeTracker) {
+        eyeTracker.dispose();
+        eyeTracker = null;
+      }
       if (player) {
         player.dispose();
         player = null;
@@ -171,11 +177,18 @@
       showStatus('Loading Spine character…');
 
       const options = SpinePlayerOptions.create(configuration, coreUrl, atlasUrl, {
+        frame: function () {
+          if (eyeTracker) eyeTracker.beforeFrame();
+        },
+        update: function (currentPlayer, deltaSeconds) {
+          if (eyeTracker && eyeTracker.player === currentPlayer) eyeTracker.afterUpdate(deltaSeconds);
+        },
         success: function (loadedPlayer) {
           if (player !== loadedPlayer) return;
           player = loadedPlayer;
           const animations = availableAnimations(loadedPlayer);
           controller = new SpineStateController(loadedPlayer, animations, latestConfiguration);
+          eyeTracker = new SpineEyeTracker(loadedPlayer, latestConfiguration, log);
           applyControlConfiguration(latestConfiguration);
           lastErrorMessage = null;
           log('info', `Character loaded with ${animations.length} animations: ${animations.join(', ')}`);
@@ -224,6 +237,11 @@
 
   window.addEventListener('obsSpineYap', function (event) {
     if (controller) controller.setYapping(Boolean(event.detail && event.detail.active));
+  });
+
+  window.addEventListener('obsSpineCursor', function (event) {
+    const detail = event.detail || {};
+    if (eyeTracker) eyeTracker.setTarget(detail.x, detail.y);
   });
 
   window.addEventListener('obsSpineTrigger', function (event) {

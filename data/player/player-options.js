@@ -19,6 +19,8 @@
       preserveDrawingBuffer: false,
       showControls: false,
       showLoading: true,
+      frame: callbacks.frame,
+      update: callbacks.update,
       success: callbacks.success,
       error: callbacks.error
     };

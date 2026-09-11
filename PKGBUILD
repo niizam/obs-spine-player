@@ -10,7 +10,14 @@ depends=('obs-studio' 'obs-studio-plugin-browser')
 makedepends=('cmake' 'git' 'ninja')
 provides=('obs-spine-player')
 conflicts=('obs-spine-player')
-source=("${_pkgname}::git+${url}.git")
+
+if [[ ${BUILDDIR} -ef ${startdir} ]]; then
+  BUILDDIR="${startdir}/.makepkg"
+fi
+
+_source_branch="${OBS_SPINE_PLAYER_BRANCH:-$(git -C "${startdir}" branch --show-current 2>/dev/null)}"
+_source_branch="${_source_branch:-main}"
+source=("${_pkgname}::git+${url}.git#branch=${_source_branch}")
 sha256sums=('SKIP')
 
 pkgver() {

@@ -37,6 +37,7 @@ jobs:
             build-essential \
             libgles2-mesa-dev \
             libsimde-dev \
+            libx11-dev \
             ninja-build \
             obs-studio
 
