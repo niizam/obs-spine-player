@@ -1,6 +1,8 @@
 #include "animation-catalog.h"
+#include "skeleton-binary.h"
 
 #include <obs-data.h>
+#include <stdio.h>
 #include <string.h>
 #include <util/bmem.h>
 #include <util/platform.h>
@@ -8,6 +10,7 @@
 #define CATALOG_SUFFIX ".animations.txt"
 #define MAX_ANIMATIONS 512
 #define MAX_ANIMATION_NAME 255
+#define MAX_BINARY_SIZE (256 * 1024 * 1024)
 
 static bool has_suffix(const char *value, const char *suffix)
 {
@@ -121,15 +124,49 @@ static bool load_sidecar_catalog(struct animation_catalog *catalog, const char *
 	return catalog->count > 0;
 }
 
+static bool add_binary_name(void *param, const char *name, size_t length)
+{
+	return catalog_add(param, name, length);
+}
+
+static bool load_binary_catalog(struct animation_catalog *catalog, const char *path)
+{
+	FILE *file = os_fopen(path, "rb");
+	if (!file)
+		return false;
+
+	const int64_t size = os_fgetsize(file);
+	uint8_t *data = size > 0 && size <= MAX_BINARY_SIZE ? bmalloc((size_t)size) : NULL;
+	const bool read = data && fread(data, 1, (size_t)size, file) == (size_t)size;
+	fclose(file);
+
+	const bool loaded = read && skeleton_binary_animation_names(data, (size_t)size, add_binary_name, catalog);
+	bfree(data);
+	if (!loaded)
+		animation_catalog_free(catalog);
+	return loaded && catalog->count > 0;
+}
+
 bool animation_catalog_load(struct animation_catalog *catalog, const char *skeleton_path)
 {
 	if (!catalog || !skeleton_path || !*skeleton_path)
 		return false;
 
 	animation_catalog_free(catalog);
-	if (has_suffix(skeleton_path, ".json") && load_json_catalog(catalog, skeleton_path))
+	catalog->source = ANIMATION_CATALOG_NONE;
+	if (has_suffix(skeleton_path, ".json") && load_json_catalog(catalog, skeleton_path)) {
+		catalog->source = ANIMATION_CATALOG_JSON;
 		return true;
-	return load_sidecar_catalog(catalog, skeleton_path);
+	}
+	if (load_sidecar_catalog(catalog, skeleton_path)) {
+		catalog->source = ANIMATION_CATALOG_SIDECAR;
+		return true;
+	}
+	if (!has_suffix(skeleton_path, ".json") && load_binary_catalog(catalog, skeleton_path)) {
+		catalog->source = ANIMATION_CATALOG_BINARY;
+		return true;
+	}
+	return false;
 }
 
 void animation_catalog_free(struct animation_catalog *catalog)

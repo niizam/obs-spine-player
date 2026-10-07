@@ -1,9 +1,19 @@
 (function () {
   const container = document.getElementById('player-container');
   const status = document.getElementById('status');
-  const runtimeFiles = {
-    '4.0': 'runtime/4.0.28/spine-player.min.js',
-    '4.1': 'runtime/4.1.20/spine-player.min.js'
+  /* Spine 3.7 has no binary loader or usable web player upstream, so its runtime adds local adapters. */
+  const runtimes = {
+    '3.7': {
+      scripts: ['runtime/3.7.94/spine-webgl.js', 'spine37-binary.js', 'spine37-player.js']
+    },
+    '4.0': {
+      scripts: ['runtime/4.0.28/spine-player.min.js'],
+      stylesheet: 'runtime/4.0.28/spine-player.min.css'
+    },
+    '4.1': {
+      scripts: ['runtime/4.1.20/spine-player.min.js'],
+      stylesheet: 'runtime/4.1.20/spine-player.min.css'
+    }
   };
 
   let loadedRuntime = null;
@@ -80,27 +90,75 @@
     }
     if (runtimePromise) return runtimePromise;
 
-    runtimePromise = new Promise(function (resolve, reject) {
-      log('info', `Loading bundled Spine ${family} runtime from ${runtimeFiles[family]}`);
+    const runtime = runtimes[family];
+    log('info', `Loading bundled Spine ${family} runtime from ${runtime.scripts.join(', ')}`);
+    if (runtime.stylesheet) {
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = runtimeFiles[family].replace('.js', '.css');
+      stylesheet.href = runtime.stylesheet;
       document.head.appendChild(stylesheet);
+    }
 
-      const script = document.createElement('script');
-      script.src = runtimeFiles[family];
-      script.onload = function () {
+    runtimePromise = runtime.scripts
+      .reduce(function (previous, source) {
+        return previous.then(function () { return loadScript(source, family); });
+      }, Promise.resolve())
+      .then(function () {
         loadedRuntime = family;
         log('info', `Bundled Spine ${family} runtime loaded successfully`);
-        resolve();
-      };
-      script.onerror = function () {
+      })
+      .catch(function (error) {
         runtimePromise = null;
-        reject(new Error(`The bundled Spine ${family} runtime could not be loaded`));
+        throw error;
+      });
+    return runtimePromise;
+  }
+
+  function loadScript(source, family) {
+    return new Promise(function (resolve, reject) {
+      const script = document.createElement('script');
+      script.src = source;
+      script.onload = function () { resolve(); };
+      script.onerror = function () {
+        reject(new Error(`The bundled Spine ${family} runtime file ${source} could not be loaded`));
       };
       document.head.appendChild(script);
     });
-    return runtimePromise;
+  }
+
+  function formatSeconds(value) {
+    return `${Number(value).toFixed(2)}s`;
+  }
+
+  function logYapPlan(plan) {
+    if (plan && plan.missingSlots && plan.missingSlots.length) {
+      log('warn', `Mouth slots not found: ${plan.missingSlots.join(', ')}`);
+    }
+    if (plan && plan.mode === 'overlay') {
+      log(
+        'info',
+        `Yap mode uses a mouth-only loop from '${plan.source}' (${formatSeconds(plan.start)}-${formatSeconds(
+          plan.end
+        )}); slots: ${plan.slots.join(', ')}; bones: ${plan.bones.join(', ') || 'none'}`
+      );
+    } else if (plan && plan.mode === 'animation') {
+      log('info', `Yap mode plays '${plan.name}' on the mouth track`);
+    } else {
+      const requested = plan && plan.requested ? plan.requested : 'auto';
+      log(
+        'warn',
+        `Yap mode has no mouth animation: '${requested}' is not in this skeleton and no talking mouth was detected`
+      );
+    }
+  }
+
+  function yapPlanner(loadedPlayer) {
+    const skeletonData = loadedPlayer.animationState.data.skeletonData;
+    return function (request) {
+      const plan = SpineMouthOverlay.plan(skeletonData, spine.Animation, request);
+      logYapPlan(plan);
+      return plan;
+    };
   }
 
   function availableAnimations(currentPlayer) {
@@ -152,7 +210,7 @@
       }
       const family =
         configuration.runtime === 'auto' ? await detectRuntime(coreUrl, shouldLogAttempt) : configuration.runtime;
-      if (!runtimeFiles[family]) throw new Error(`Unsupported Spine runtime selection: ${family}`);
+      if (!runtimes[family]) throw new Error(`Unsupported Spine runtime selection: ${family}`);
       const atlasResponse = await fetchAsset(atlasUrl, 'Atlas');
       await atlasResponse.text();
       if (configuration.runtime !== 'auto') {
@@ -187,13 +245,18 @@
           if (player !== loadedPlayer) return;
           player = loadedPlayer;
           const animations = availableAnimations(loadedPlayer);
-          controller = new SpineStateController(loadedPlayer, animations, latestConfiguration);
+          controller = new SpineStateController(
+            loadedPlayer,
+            animations,
+            latestConfiguration,
+            yapPlanner(loadedPlayer)
+          );
           eyeTracker = new SpineEyeTracker(loadedPlayer, latestConfiguration, log);
           applyControlConfiguration(latestConfiguration);
           lastErrorMessage = null;
           log('info', `Character loaded with ${animations.length} animations: ${animations.join(', ')}`);
           const defaultAnimation = latestConfiguration.defaultAnimation || 'idle';
-          if (!animations.includes(defaultAnimation)) {
+          if (controller.resolve(defaultAnimation, null) === null) {
             log('warn', `Configured default animation '${defaultAnimation}' is not present in the loaded skeleton`);
           }
           const canvas = container.querySelector('canvas');

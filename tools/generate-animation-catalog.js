@@ -7,6 +7,7 @@ const versionDetector = require('../data/player/version-detector.js');
 
 function usage() {
   console.error('Usage: node tools/generate-animation-catalog.js <skeleton.skel|json> [atlas.atlas] [output.txt]');
+  console.error('Supports Spine 3.7, 4.0, and 4.1 exports.');
   process.exit(2);
 }
 
@@ -35,33 +36,48 @@ function runtimeContext() {
   });
 }
 
+const playerDirectory = path.join(__dirname, '..', 'data', 'player');
+
+/* The same files the OBS renderer loads for each family; Spine 3.7 adds the local binary reader. */
+const runtimeScripts = {
+  '3.7': ['runtime/3.7.94/spine-webgl.js', 'spine37-binary.js'],
+  '4.0': ['runtime/4.0.28/spine-player.min.js'],
+  '4.1': ['runtime/4.1.20/spine-player.min.js']
+};
+
+function loadRuntime(family) {
+  const context = runtimeContext();
+  for (const script of runtimeScripts[family]) {
+    const scriptPath = path.join(playerDirectory, script);
+    vm.runInContext(fs.readFileSync(scriptPath, 'utf8'), context, { filename: scriptPath });
+  }
+  return context.spine;
+}
+
+function placeholderTexture(width, height) {
+  return {
+    getImage: function () { return { width: width || 1, height: height || 1 }; },
+    setFilters: function () {},
+    setWraps: function () {}
+  };
+}
+
+function readAtlas(spine, family, atlasText) {
+  if (family === '3.7') {
+    return new spine.TextureAtlas(atlasText, function () { return placeholderTexture(); });
+  }
+  const atlas = new spine.TextureAtlas(atlasText);
+  for (const page of atlas.pages) page.setTexture(placeholderTexture(page.width, page.height));
+  return atlas;
+}
+
 function binaryAnimations(skeletonPath, atlasPath) {
   const binary = fs.readFileSync(skeletonPath);
   const version = versionDetector.fromBinary(binary);
   const family = versionDetector.runtimeFamily(version);
-  const runtimeVersions = { '4.0': '4.0.28', '4.1': '4.1.20' };
-  const runtimePath = path.join(
-    __dirname,
-    '..',
-    'data',
-    'player',
-    'runtime',
-    runtimeVersions[family],
-    'spine-player.min.js'
-  );
-  const context = runtimeContext();
-  vm.runInContext(fs.readFileSync(runtimePath, 'utf8'), context, { filename: runtimePath });
+  const spine = loadRuntime(family);
 
-  const spine = context.spine;
-  const atlas = new spine.TextureAtlas(fs.readFileSync(atlasPath, 'utf8'));
-  for (const page of atlas.pages) {
-    page.setTexture({
-      getImage: function () { return { width: page.width, height: page.height }; },
-      setFilters: function () {},
-      setWraps: function () {}
-    });
-  }
-
+  const atlas = readAtlas(spine, family, fs.readFileSync(atlasPath, 'utf8'));
   const loader = new spine.AtlasAttachmentLoader(atlas);
   const skeleton = new spine.SkeletonBinary(loader).readSkeletonData(new Uint8Array(binary));
   return skeleton.animations.map(function (animation) { return animation.name; });

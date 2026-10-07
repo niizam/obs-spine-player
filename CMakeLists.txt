@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(obs-spine-player VERSION 0.1.0 LANGUAGES C)
+project(obs-spine-player VERSION 0.2.0 LANGUAGES C)
 
 include(GNUInstallDirs)
 
@@ -19,6 +19,8 @@ target_sources(
     src/cursor-input.h
     src/level-gate.c
     src/level-gate.h
+    src/skeleton-binary.c
+    src/skeleton-binary.h
     src/spine-source.c
     src/spine-source.h
 )
@@ -82,7 +84,12 @@ if(UNIX)
 endif()
 add_test(NAME level-gate-tests COMMAND level-gate-tests)
 
-add_executable(animation-catalog-tests tests/animation-catalog-test.c src/animation-catalog.c)
+add_executable(skeleton-binary-tests tests/skeleton-binary-test.c src/skeleton-binary.c)
+target_include_directories(skeleton-binary-tests PRIVATE src)
+target_compile_features(skeleton-binary-tests PRIVATE c_std_11)
+add_test(NAME skeleton-binary-tests COMMAND skeleton-binary-tests)
+
+add_executable(animation-catalog-tests tests/animation-catalog-test.c src/animation-catalog.c src/skeleton-binary.c)
 target_include_directories(animation-catalog-tests PRIVATE src)
 target_link_libraries(animation-catalog-tests PRIVATE OBS::libobs)
 target_compile_features(animation-catalog-tests PRIVATE c_std_11)
