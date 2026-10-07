@@ -3,12 +3,22 @@
   if (typeof module === 'object' && module.exports) module.exports = Controller;
   root.SpineStateController = Controller;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  const YAP_AUTO = 'auto';
+  const DEDICATED_YAP_ANIMATION = 'talk_start';
+
   class SpineStateController {
-    constructor(player, animations, options) {
+    /*
+     * yapPlanner(request) decides what the mouth track plays for { yapAnimation, mouthSlots } and returns
+     * { mode: 'animation', name }, { mode: 'overlay', animation, start, end }, or a falsy/modeless result.
+     * Without a planner, yap mode plays the named animation (or talk_start for 'auto') unchanged.
+     */
+    constructor(player, animations, options, yapPlanner) {
       this.player = player;
       this.animations = animations.slice();
+      this.yapPlanner = typeof yapPlanner === 'function' ? yapPlanner : null;
       this.defaultAnimation = 'idle';
-      this.yapAnimation = 'talk_start';
+      this.yapRequest = null;
+      this.yapPlan = null;
       this.enabled = true;
       this.yapping = false;
       this.configure(options || {});
@@ -21,15 +31,38 @@
       return match || fallback || null;
     }
 
+    planYap(request) {
+      if (this.yapPlanner) return this.yapPlanner(request);
+      const requested = request.yapAnimation.toLowerCase() === YAP_AUTO ? DEDICATED_YAP_ANIMATION : request.yapAnimation;
+      const name = this.resolve(requested, null);
+      return name ? { mode: 'animation', name } : null;
+    }
+
     configure(options) {
       const wasEnabled = this.enabled;
       const oldDefault = this.defaultAnimation;
-      const oldYap = this.yapAnimation;
       this.enabled = options.stateEnabled !== false;
       this.defaultAnimation = this.resolve(options.defaultAnimation || this.defaultAnimation, this.animations[0]);
-      this.yapAnimation = this.resolve(options.yapAnimation || this.yapAnimation, null);
+
+      const request = {
+        yapAnimation: String(options.yapAnimation || (this.yapRequest && this.yapRequest.yapAnimation) || YAP_AUTO),
+        mouthSlots: String(options.mouthSlots || '')
+      };
+      const requestKey = JSON.stringify(request);
+      const yapChanged = requestKey !== JSON.stringify(this.yapRequest);
+      if (yapChanged) {
+        this.yapRequest = request;
+        const plan = this.planYap(request);
+        this.yapPlan = plan && plan.mode ? plan : null;
+      }
+
       if (oldDefault !== this.defaultAnimation || (wasEnabled && !this.enabled)) this.reset();
-      if (this.yapping && oldYap !== this.yapAnimation) this.setYapping(true, true);
+      if (this.yapping && yapChanged) this.setYapping(true, true);
+    }
+
+    get yapAnimation() {
+      if (!this.yapPlan) return null;
+      return this.yapPlan.mode === 'overlay' ? this.yapPlan.animation.name : this.yapPlan.name;
     }
 
     start() {
@@ -54,18 +87,26 @@
     }
 
     setYapping(active, force) {
-      const next = Boolean(active && this.yapAnimation);
+      const plan = this.yapPlan;
+      const next = Boolean(active && plan);
       if (!force && next === this.yapping) return false;
       this.yapping = next;
-      if (next) {
-        this.player.animationState.setAnimation(1, this.yapAnimation, true);
+      const state = this.player.animationState;
+      if (!next) {
+        state.setEmptyAnimation(1, 0.08);
+      } else if (plan.mode === 'overlay') {
+        const entry = state.setAnimationWith(1, plan.animation, true);
+        if (entry) {
+          entry.animationStart = plan.start;
+          entry.animationEnd = plan.end;
+        }
       } else {
-        this.player.animationState.setEmptyAnimation(1, 0.08);
+        state.setAnimation(1, plan.name, true);
       }
       return true;
     }
   }
 
+  SpineStateController.YAP_AUTO = YAP_AUTO;
   return SpineStateController;
 });
-

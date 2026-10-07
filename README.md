@@ -1,15 +1,17 @@
 # OBS Spine Player
 
-OBS Spine Player adds a transparent **Spine Character** source to OBS. It supports Spine 4.0 and 4.1 binary or JSON exports, starts in `idle`, moves a compatible mouth animation from microphone volume, and exposes optional emotion/action hotkeys.
+OBS Spine Player adds a transparent **Spine Character** source to OBS. It supports Spine 3.7, 4.0, and 4.1 binary or JSON exports, starts in `idle`, moves a compatible mouth animation from microphone volume, and exposes optional emotion/action hotkeys.
 
 No speech recognition, network service, or external audio process is used.
 
 ## Features
 
-- Bundled Spine Web Player 4.0.28 and 4.1.20 runtimes with automatic asset-version detection.
+- Bundled Spine Web Player 4.0.28 and 4.1.20 runtimes and the spine-ts 3.7.94 WebGL runtime, with automatic asset-version detection.
+- Spine 3.7 `.skel` support through a port of the official 3.7 binary reader (spine-ts 3.7 itself only reads JSON).
+- Automatic animation catalogs: animation names are read directly from JSON and from Spine 3.7/4.0/4.1 binary skeletons.
 - Native OBS source properties and transparent rendering through the installed OBS Browser plugin.
 - Lightweight microphone gate with configurable threshold, attack, and release hold.
-- Independent mouth overlay on Spine track 1, leaving `idle` or the selected emotion on track 0.
+- Independent mouth overlay on Spine track 1, leaving `idle` or the selected emotion on track 0. Rigs without a dedicated `talk_start` animation, such as CounterSide illustrations, get a mouth-only loop derived from their own talking clip.
 - Optional desktop-cursor eye tracking with configurable Spine slot groups, travel, and smoothing.
 - Optional emotion state machine with eight configurable looping or one-shot slots.
 - Optional OBS hotkeys for all eight slots and returning to the default animation.
@@ -40,7 +42,7 @@ GitHub Actions builds Linux x86_64 and Windows x64 packages on pushes to `main`,
 
 1. Add a **Spine Character** source and choose its `.skel` or `.json` file and `.atlas` file. Atlas image pages must remain at paths referenced by the atlas.
 2. The character starts in `idle` by default; choose another detected animation when needed.
-3. Leave **Spine runtime** on auto-detect, or force 4.0/4.1 if a local-file policy prevents version probing.
+3. Leave **Spine runtime** on auto-detect, or force 3.7/4.0/4.1 if a local-file policy prevents version probing.
 4. Enable yap mode, choose an existing OBS microphone/audio input, and tune the threshold. The selected source must be active in OBS to produce audio callbacks.
 5. Choose default, mouth, and emotion/action animations from the detected dropdowns. Disable **Loop** for actions that should return to `idle` after one play.
 6. Open **Settings → Hotkeys**, search for “Spine Player,” and bind the desired source hotkeys.
@@ -56,9 +58,25 @@ Those slots resolve to two controlling bones in the supplied rig, so the pupil, 
 
 Windows uses the virtual desktop cursor. Linux uses direct Hyprland IPC when available and falls back to X11. Other native Wayland compositors may deny global cursor coordinates by design, in which case OBS logs a warning and the eyes remain centered. No camera, face tracking, or speech recognition is involved.
 
-Animation names are read directly from Spine JSON exports. Binary `.skel` exports use an adjacent catalog with the same base name and an `.animations.txt` suffix, one animation name per line. Dropdowns remain editable so an existing scene or an uncatalogued binary export is never blocked.
+## Animation catalogs
 
-Generate or refresh a binary catalog from the asset itself with `node tools/generate-animation-catalog.js /path/to/model.skel`. The tool detects Spine 4.0/4.1 and uses the matching bundled runtime; it does not guess names from binary strings.
+Animation names are discovered automatically for any model. JSON exports list them directly. Binary `.skel` exports are parsed natively by `src/skeleton-binary.c`, which walks the Spine 3.7, 4.0, or 4.1 binary layout to the animation section without guessing names from strings. An adjacent catalog with the same base name and an `.animations.txt` suffix, one name per line, still takes precedence when present, so a curated list can override the detected one. Dropdowns remain editable so an existing scene or an unsupported export is never blocked. OBS logs which source the catalog came from.
+
+To write a catalog file anyway, run `node tools/generate-animation-catalog.js /path/to/model.skel`. The tool detects Spine 3.7/4.0/4.1 and parses the skeleton with the matching bundled runtime.
+
+## Yap mode and mouth detection
+
+**Mouth animation** defaults to **Automatic**:
+
+- If the skeleton has `talk_start`, it loops on track 1 unchanged, as before.
+- Otherwise the renderer looks for a talking-mouth attachment (a name containing `talk`, for example `mouth_talk`). The mouth is every slot on that attachment's bone; bones are animated only when every slot they carry belongs to the mouth. The clip with the most talking-mouth keys becomes the source, and only its mouth timelines are looped, from the first talking key to the end of the last talking stretch.
+- Choosing a specific clip that moves more than the mouth (for example `TOUCH`) also reduces it to its mouth timelines.
+
+**Mouth slots** overrides detection with a comma-separated slot list. The browser log reports the decision, for example `Yap mode uses a mouth-only loop from 'TOUCH' (0.87s-9.13s); slots: face_13, mouth_1_hate; bones: face_13`.
+
+### CounterSide illustrations
+
+CounterSide unit illustrations (`ab_unit_illust_*`) are Spine 3.7 rigs whose emotions (`IDLE`, `LAUGH`, `SERIOUS`, ...) swap mouth and eye attachments, while `TOUCH` contains the voiced line. With the defaults, yap mode talks over any emotion and returns to that emotion's mouth when you stop. Keep the `.atlas` and its `.png` in the same folder: extracted bundles store them under `TextAsset/` and `Texture2D/`, but atlas pages are resolved next to the atlas. The `_BG` skeleton is a separate background layer; add it as a second source behind the character if you want it.
 
 Character assets are intentionally excluded from version control. A local `characters/` directory is ignored by Git and installed when present, but published source packages contain no character skeletons, atlases, textures, or animation catalogs.
 

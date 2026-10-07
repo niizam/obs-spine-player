@@ -24,6 +24,8 @@
 #define SETTING_YAP_ATTACK "yap_attack_ms"
 #define SETTING_YAP_RELEASE "yap_release_ms"
 #define SETTING_YAP_ANIMATION "yap_animation"
+#define SETTING_YAP_MOUTH_SLOTS "yap_mouth_slots"
+#define YAP_ANIMATION_AUTO "auto"
 #define SETTING_EYE_TRACKING_ENABLED "eye_tracking_enabled"
 #define SETTING_EYE_LEFT_SLOTS "eye_left_slots"
 #define SETTING_EYE_RIGHT_SLOTS "eye_right_slots"
@@ -210,6 +212,7 @@ static void send_configuration(struct spine_source *context)
 	obs_data_set_string(payload, "runtime", obs_data_get_string(settings, SETTING_RUNTIME));
 	obs_data_set_string(payload, "defaultAnimation", obs_data_get_string(settings, SETTING_DEFAULT_ANIMATION));
 	obs_data_set_string(payload, "yapAnimation", obs_data_get_string(settings, SETTING_YAP_ANIMATION));
+	obs_data_set_string(payload, "mouthSlots", obs_data_get_string(settings, SETTING_YAP_MOUTH_SLOTS));
 	obs_data_set_bool(payload, "yapEnabled", context->yap_enabled);
 	obs_data_set_bool(payload, "yapActive", context->yap_enabled && context->gate.active);
 	obs_data_set_bool(payload, "eyeTrackingEnabled", context->eye_tracking_enabled);
@@ -559,7 +562,8 @@ static void spine_source_defaults(obs_data_t *settings)
 	obs_data_set_default_double(settings, SETTING_YAP_THRESHOLD, -35.0);
 	obs_data_set_default_double(settings, SETTING_YAP_ATTACK, 25.0);
 	obs_data_set_default_double(settings, SETTING_YAP_RELEASE, 180.0);
-	obs_data_set_default_string(settings, SETTING_YAP_ANIMATION, "talk_start");
+	obs_data_set_default_string(settings, SETTING_YAP_ANIMATION, YAP_ANIMATION_AUTO);
+	obs_data_set_default_string(settings, SETTING_YAP_MOUTH_SLOTS, "");
 	obs_data_set_default_bool(settings, SETTING_EYE_TRACKING_ENABLED, false);
 	obs_data_set_default_string(settings, SETTING_EYE_LEFT_SLOTS, DEFAULT_LEFT_EYE_SLOTS);
 	obs_data_set_default_string(settings, SETTING_EYE_RIGHT_SLOTS, DEFAULT_RIGHT_EYE_SLOTS);
@@ -598,7 +602,7 @@ static bool yap_enabled_modified(obs_properties_t *properties, obs_property_t *p
 {
 	const bool visible = obs_data_get_bool(settings, SETTING_YAP_ENABLED);
 	const char *controlled[] = {SETTING_YAP_AUDIO_SOURCE, SETTING_YAP_THRESHOLD, SETTING_YAP_ATTACK,
-				    SETTING_YAP_RELEASE, SETTING_YAP_ANIMATION};
+				    SETTING_YAP_RELEASE, SETTING_YAP_ANIMATION, SETTING_YAP_MOUTH_SLOTS};
 	for (size_t index = 0; index < sizeof(controlled) / sizeof(controlled[0]); index++)
 		obs_property_set_visible(obs_properties_get(properties, controlled[index]), visible);
 	UNUSED_PARAMETER(property);
@@ -643,9 +647,11 @@ static bool animation_property_contains(obs_property_t *property, const char *va
 }
 
 static void populate_animation_property(obs_property_t *property, const struct animation_catalog *catalog,
-					obs_data_t *settings, const char *setting_name, bool allow_empty)
+					obs_data_t *settings, const char *setting_name, bool allow_empty, bool allow_auto)
 {
 	obs_property_list_clear(property);
+	if (allow_auto)
+		obs_property_list_add_string(property, obs_module_text("YapAnimationAuto"), YAP_ANIMATION_AUTO);
 	if (allow_empty)
 		obs_property_list_add_string(property, obs_module_text("AnimationNone"), "");
 	for (size_t index = 0; index < catalog->count; index++)
@@ -656,26 +662,48 @@ static void populate_animation_property(obs_property_t *property, const struct a
 		obs_property_list_add_string(property, current, current);
 }
 
-static void populate_animation_properties(obs_properties_t *properties, obs_data_t *settings)
+static const char *catalog_source_name(enum animation_catalog_source source)
+{
+	switch (source) {
+	case ANIMATION_CATALOG_JSON:
+		return "the JSON skeleton";
+	case ANIMATION_CATALOG_SIDECAR:
+		return "the adjacent .animations.txt catalog";
+	case ANIMATION_CATALOG_BINARY:
+		return "the binary skeleton";
+	default:
+		return "nothing";
+	}
+}
+
+static void populate_animation_properties(struct spine_source *context, obs_properties_t *properties,
+					  obs_data_t *settings)
 {
 	struct animation_catalog catalog = {0};
-	animation_catalog_load(&catalog, obs_data_get_string(settings, SETTING_CORE_PATH));
+	const char *core_path = obs_data_get_string(settings, SETTING_CORE_PATH);
+	if (animation_catalog_load(&catalog, core_path))
+		spine_log(context, LOG_INFO, "animation catalog: %zu animations read from %s", catalog.count,
+			  catalog_source_name(catalog.source));
+	else if (core_path && *core_path)
+		spine_log(context, LOG_WARNING,
+			  "no animation names could be read from %s; type animation names manually or add a .animations.txt catalog",
+			  core_path);
 	populate_animation_property(obs_properties_get(properties, SETTING_DEFAULT_ANIMATION), &catalog, settings,
-				    SETTING_DEFAULT_ANIMATION, false);
+				    SETTING_DEFAULT_ANIMATION, false, false);
 	populate_animation_property(obs_properties_get(properties, SETTING_YAP_ANIMATION), &catalog, settings,
-				    SETTING_YAP_ANIMATION, true);
+				    SETTING_YAP_ANIMATION, true, true);
 	for (size_t index = 0; index < EMOTION_COUNT; index++) {
 		char animation_key[32];
 		emotion_setting_name(animation_key, sizeof(animation_key), index);
 		populate_animation_property(obs_properties_get(properties, animation_key), &catalog, settings,
-					    animation_key, true);
+					    animation_key, true, false);
 	}
 	animation_catalog_free(&catalog);
 }
 
 static bool core_path_modified(obs_properties_t *properties, obs_property_t *property, obs_data_t *settings)
 {
-	populate_animation_properties(properties, settings);
+	populate_animation_properties(obs_properties_get_param(properties), properties, settings);
 	UNUSED_PARAMETER(property);
 	return true;
 }
@@ -684,6 +712,7 @@ static obs_properties_t *spine_source_properties(void *data)
 {
 	struct spine_source *context = data;
 	obs_properties_t *properties = obs_properties_create();
+	obs_properties_set_param(properties, context, NULL);
 	obs_property_t *core_path = obs_properties_add_path(properties, SETTING_CORE_PATH, obs_module_text("CoreFile"),
 						  OBS_PATH_FILE,
 						  "Spine skeleton (*.skel *.json);;All files (*.*)", NULL);
@@ -693,6 +722,7 @@ static obs_properties_t *spine_source_properties(void *data)
 	obs_property_t *runtime = obs_properties_add_list(properties, SETTING_RUNTIME, obs_module_text("RuntimeVersion"),
 							OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(runtime, obs_module_text("RuntimeAuto"), "auto");
+	obs_property_list_add_string(runtime, "Spine 3.7", "3.7");
 	obs_property_list_add_string(runtime, "Spine 4.0", "4.0");
 	obs_property_list_add_string(runtime, "Spine 4.1", "4.1");
 	obs_properties_add_list(properties, SETTING_DEFAULT_ANIMATION, obs_module_text("DefaultAnimation"),
@@ -713,8 +743,13 @@ static obs_properties_t *spine_source_properties(void *data)
 					0.5);
 	obs_properties_add_float(properties, SETTING_YAP_ATTACK, obs_module_text("YapAttack"), 0.0, 500.0, 5.0);
 	obs_properties_add_float(properties, SETTING_YAP_RELEASE, obs_module_text("YapRelease"), 0.0, 2000.0, 10.0);
-	obs_properties_add_list(properties, SETTING_YAP_ANIMATION, obs_module_text("YapAnimation"),
-				OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
+	obs_property_t *yap_animation = obs_properties_add_list(properties, SETTING_YAP_ANIMATION,
+								obs_module_text("YapAnimation"), OBS_COMBO_TYPE_EDITABLE,
+								OBS_COMBO_FORMAT_STRING);
+	obs_property_set_long_description(yap_animation, obs_module_text("YapAnimationHelp"));
+	obs_property_t *mouth_slots = obs_properties_add_text(properties, SETTING_YAP_MOUTH_SLOTS,
+							      obs_module_text("YapMouthSlots"), OBS_TEXT_DEFAULT);
+	obs_property_set_long_description(mouth_slots, obs_module_text("YapMouthSlotsHelp"));
 
 	obs_property_t *eye_tracking_enabled =
 		obs_properties_add_bool(properties, SETTING_EYE_TRACKING_ENABLED, obs_module_text("EyeTrackingEnabled"));
@@ -750,7 +785,7 @@ static obs_properties_t *spine_source_properties(void *data)
 	}
 	obs_data_t *settings = context ? obs_source_get_settings(context->source) : NULL;
 	if (settings) {
-		populate_animation_properties(properties, settings);
+		populate_animation_properties(context, properties, settings);
 		obs_data_release(settings);
 	}
 	return properties;

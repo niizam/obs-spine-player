@@ -18,3 +18,24 @@ test('accepts only the supported runtime families', () => {
   assert.throws(() => detector.runtimeFamily('4.2.0'), /Unsupported/);
 });
 
+
+test('reads a Spine 3.7 version after the hash string', () => {
+  const hash = Buffer.from('lvvf7VoJQ6PFFnylIDh8Ri98fvQ');
+  const version = Buffer.from('3.7.93');
+  const binary = Buffer.concat([
+    Buffer.from([hash.length + 1]), hash,
+    Buffer.from([version.length + 1]), version,
+    Buffer.alloc(9)
+  ]);
+  assert.equal(detector.fromBinary(binary), '3.7.93');
+});
+
+test('reads the synthetic Spine 3.7 fixture', () => {
+  const binary = require('node:fs').readFileSync(require('node:path').join(__dirname, 'fixtures', 'spine37-synthetic.skel'));
+  assert.equal(detector.fromBinary(binary), '3.7.93');
+});
+
+test('maps Spine 3.7 exports to the 3.7 runtime and rejects 3.8', () => {
+  assert.equal(detector.runtimeFamily('3.7.93'), '3.7');
+  assert.throws(() => detector.runtimeFamily('3.8.99'), /Unsupported/);
+});
