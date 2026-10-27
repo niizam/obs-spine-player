@@ -1,6 +1,6 @@
 _pkgname=obs-spine-player
 pkgname=obs-spine-player-git
-pkgver=0.3.0.r0.g0000000
+pkgver=0.3.1.r0.g0000000
 pkgrel=1
 pkgdesc='Spine 3.7/4.0/4.1 character source for OBS Studio (git version)'
 arch=('x86_64')
@@ -22,7 +22,7 @@ sha256sums=('SKIP')
 
 pkgver() {
   cd "${_pkgname}"
-  printf '0.3.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  printf '0.3.1.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
 }
 
 build() {
