@@ -6,6 +6,9 @@ include(GNUInstallDirs)
 
 find_package(libobs CONFIG REQUIRED)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/spine-runtime.cmake")
+spine_add_raw_runtime(4.1)
+
 add_library(obs-spine-player MODULE)
 target_sources(
   obs-spine-player

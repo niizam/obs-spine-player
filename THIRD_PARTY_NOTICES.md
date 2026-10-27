@@ -6,3 +6,5 @@ The bundled files under `data/player/runtime/` are copied from the supplied `pub
 
 Their license is included at `data/player/runtime/SPINE-RUNTIMES-LICENSE.txt`. Use and redistribution of the runtimes and Spine assets are subject to that license and may require a Spine Editor license.
 
+
+`third_party/spine-c-4.1/` is the unmodified spine-c runtime (`spine-c/spine-c/include` and `src`) from the `4.1` branch of https://github.com/EsotericSoftware/spine-runtimes at commit `77a5db0ec6d16331f5efbaa7662bba9355bd3424` (recorded in `third_party/spine-c-4.1/VERSION`). The native renderer compiles it with a generated header that renames its external symbols. `tests/fixtures/spine41/` holds the Spineboy example export (`spineboy-pro.skel`, `spineboy-pro.json`, `spineboy-pma.atlas`, `spineboy-pma.png`) from `examples/spineboy/export` at the same commit, used only by tests. Both are covered by the Spine Runtimes License included at `third_party/spine-c-4.1/LICENSE`.
