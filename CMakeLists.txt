@@ -37,6 +37,11 @@ target_sources(
     src/native/draw-list.c
     src/native/draw-list.h
     src/native/spine-backend.h
+    src/native/framing.c
+    src/native/framing.h
+    src/native/load-gate.h
+    src/native/native-renderer.c
+    src/native/native-renderer.h
 )
 target_include_directories(obs-spine-player PRIVATE src src/native)
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
@@ -117,6 +122,14 @@ if(UNIX)
   target_link_libraries(backend-41-tests PRIVATE m pthread)
 endif()
 add_test(NAME backend-41-tests COMMAND backend-41-tests)
+
+add_executable(framing-tests tests/framing-test.c src/native/framing.c)
+target_include_directories(framing-tests PRIVATE src/native tests)
+target_compile_features(framing-tests PRIVATE c_std_11)
+if(UNIX)
+  target_link_libraries(framing-tests PRIVATE m)
+endif()
+add_test(NAME framing-tests COMMAND framing-tests)
 
 add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
 target_include_directories(level-gate-tests PRIVATE src)

@@ -192,7 +192,8 @@ static bool load_skeleton(struct spine_asset *asset, const char *skeleton_path, 
 		return false;
 	}
 
-	if (has_extension(skeleton_path, "skel")) {
+	/* Same rule as the browser player: JSON only for a .json extension, binary otherwise. */
+	if (!has_extension(skeleton_path, "json")) {
 		/* spine-c's binary reader trusts its input; let the bounds-checked reader
 		 * reject truncated or corrupt files first. */
 		size_t names = 0;
@@ -268,6 +269,16 @@ static size_t page_count(const struct spine_asset *asset)
 static const struct spine_page_image *page_image(const struct spine_asset *asset, size_t page)
 {
 	return asset && page < asset->page_count ? &asset->pages[page] : NULL;
+}
+
+static void release_page_images(struct spine_asset *asset)
+{
+	if (!asset)
+		return;
+	for (size_t index = 0; index < asset->page_count; index++) {
+		atlas_image_free_mips(asset->pages[index].level_pixels, asset->pages[index].levels);
+		asset->pages[index].level_pixels = NULL;
+	}
 }
 
 static size_t animation_count(const struct spine_asset *asset)
@@ -625,6 +636,7 @@ static const struct spine_backend backend = {
 	.free_asset = free_asset,
 	.page_count = page_count,
 	.page_image = page_image,
+	.release_page_images = release_page_images,
 	.animation_count = animation_count,
 	.animation_name = animation_name,
 	.create_instance = create_instance,

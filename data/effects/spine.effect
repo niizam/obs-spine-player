@@ -1,0 +1,45 @@
+// Spine two-colour tint with premultiplied-alpha textures (spine-ts 4.1 "TwoColored" shader).
+// light: premultiplied vertex colour. dark: premultiplied dark colour, alpha 1 (or black).
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+sampler_state spine_sampler {
+	Filter        = Anisotropy;
+	MaxAnisotropy = 16;
+	AddressU      = Clamp;
+	AddressV      = Clamp;
+};
+
+struct VertIn {
+	float4 pos   : POSITION;
+	float4 light : COLOR;
+	float2 uv    : TEXCOORD0;
+	float4 dark  : TEXCOORD1;
+};
+
+VertIn VSSpine(VertIn vert_in)
+{
+	VertIn vert_out;
+	vert_out.pos   = mul(float4(vert_in.pos.xyz, 1.0), ViewProj);
+	vert_out.light = vert_in.light;
+	vert_out.uv    = vert_in.uv;
+	vert_out.dark  = vert_in.dark;
+	return vert_out;
+}
+
+float4 PSSpine(VertIn vert_in) : TARGET
+{
+	float4 tex = image.Sample(spine_sampler, vert_in.uv);
+	float3 rgb = ((tex.a - 1.0) * vert_in.dark.a + 1.0 - tex.rgb) * vert_in.dark.rgb + tex.rgb * vert_in.light.rgb;
+	return float4(rgb, tex.a * vert_in.light.a);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSSpine(vert_in);
+		pixel_shader  = PSSpine(vert_in);
+	}
+}

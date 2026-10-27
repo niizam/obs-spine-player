@@ -454,6 +454,39 @@ static void test_empty_skeleton(void)
 	backend->free_asset(asset);
 }
 
+static void test_non_json_extension_reads_binary(void)
+{
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/backend41-spineboy.bytes", TEST_OUTPUT_DIR);
+	CHECK(copy_file(FIXTURE("spineboy-pro.skel"), path));
+	char error[512] = "";
+	struct spine_asset *asset = load(path, FIXTURE("spineboy-pma.atlas"), error, sizeof(error));
+	CHECK(asset != NULL);
+	if (asset)
+		backend->free_asset(asset);
+	else
+		fprintf(stderr, "bytes load error: %s\n", error);
+}
+
+static void test_release_page_images(void)
+{
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (!asset)
+		return;
+	backend->release_page_images(asset);
+	const struct spine_page_image *page = backend->page_image(asset, 0);
+	CHECK(page != NULL && page->level_pixels == NULL);
+	/* Drawing still works: the GPU copy is what renders. */
+	struct spine_instance *instance = backend->create_instance(asset);
+	struct spine_draw_list list = {0};
+	CHECK(backend->build_draw_list(instance, &list));
+	CHECK(list.batch_count >= 1);
+	spine_draw_list_free(&list);
+	backend->free_instance(instance);
+	backend->free_asset(asset);
+}
+
 int main(void)
 {
 	backend = spine_backend_41();
@@ -477,5 +510,7 @@ int main(void)
 	test_draw_list_well_formed();
 	test_draw_list_reuse();
 	test_empty_skeleton();
+	test_non_json_extension_reads_binary();
+	test_release_page_images();
 	return TEST_RESULT();
 }

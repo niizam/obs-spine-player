@@ -84,6 +84,8 @@ struct spine_backend {
 	void (*free_asset)(struct spine_asset *asset);
 	size_t (*page_count)(const struct spine_asset *asset);
 	const struct spine_page_image *(*page_image)(const struct spine_asset *asset, size_t page);
+	/* Frees the CPU copies of the page images once they are on the GPU (level_pixels becomes NULL). */
+	void (*release_page_images)(struct spine_asset *asset);
 	size_t (*animation_count)(const struct spine_asset *asset);
 	const char *(*animation_name)(const struct spine_asset *asset, size_t index);
 	struct spine_instance *(*create_instance)(struct spine_asset *asset);
