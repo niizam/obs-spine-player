@@ -2,7 +2,7 @@
 #include "atlas-image.h"
 #include "draw-list.h"
 #include "test-check.h"
-#include "spine41/reference.h"
+#include REF_HEADER
 
 #include <stdlib.h>
 #include <string.h>
@@ -17,7 +17,8 @@
 #include <unistd.h>
 #endif
 
-#define FIXTURE(name) TEST_FIXTURE_DIR "/spine41/" name
+/* Compiled once per Spine version: FIXTURE_VERSION_DIR, REF_HEADER, BACKEND_ENTRY and BACKEND_NAME come from CMake. */
+#define FIXTURE(name) TEST_FIXTURE_DIR "/" FIXTURE_VERSION_DIR "/" name
 
 /* ---- file helpers that understand UTF-8 paths ---- */
 
@@ -155,7 +156,7 @@ static void test_loads_json(void)
 	struct spine_asset *asset = load(FIXTURE("spineboy-pro.json"), FIXTURE("spineboy-pma.atlas"), error, sizeof(error));
 	CHECK(asset != NULL);
 	if (asset) {
-		CHECK(backend->animation_count(asset) == 11);
+		CHECK(backend->animation_count(asset) == REF_ANIMATION_COUNT);
 		backend->free_asset(asset);
 	} else {
 		fprintf(stderr, "load error: %s\n", error);
@@ -177,7 +178,7 @@ static void test_animation_names(void)
 	CHECK(asset != NULL);
 	if (!asset)
 		return;
-	CHECK(backend->animation_count(asset) == 11);
+	CHECK(backend->animation_count(asset) == REF_ANIMATION_COUNT);
 	CHECK(has_animation(asset, "idle"));
 	CHECK(has_animation(asset, "walk"));
 	CHECK(has_animation(asset, "run"));
@@ -231,7 +232,7 @@ static void test_utf8_path(void)
 	const char *files[] = {"spineboy-pro.skel", "spineboy-pma.atlas", "spineboy-pma.png"};
 	for (size_t i = 0; i < 3; i++) {
 		char from[1024], to[1100];
-		snprintf(from, sizeof(from), "%s/spine41/%s", TEST_FIXTURE_DIR, files[i]);
+		snprintf(from, sizeof(from), "%s/%s/%s", TEST_FIXTURE_DIR, FIXTURE_VERSION_DIR, files[i]);
 		snprintf(to, sizeof(to), "%s/%s", directory, files[i]);
 		CHECK(copy_file(from, to));
 	}
@@ -656,13 +657,14 @@ static void test_describe(void)
 	const struct spine_skeleton_desc *desc = backend->describe(asset);
 	CHECK(desc != NULL);
 	CHECK(backend->describe(asset) == desc); /* cached */
-	CHECK(desc->slot_count == 52 && desc->bone_count == 67 && desc->animation_count == 11);
+	CHECK(desc->slot_count == REF_SLOT_COUNT && desc->bone_count == REF_BONE_COUNT &&
+	      desc->animation_count == REF_ANIMATION_COUNT);
 	const int mouth = find_slot_index(desc, "mouth");
-	CHECK(mouth == 33);
+	CHECK(mouth == REF_MOUTH_SLOT);
 	if (mouth >= 0) {
 		const int head = desc->slots[mouth].bone;
-		CHECK(strcmp(desc->bones[head].name, "head") == 0);
-		CHECK(strcmp(desc->bones[desc->bones[head].parent].name, "neck") == 0);
+		CHECK(strcmp(desc->bones[head].name, REF_MOUTH_BONE_NAME) == 0);
+		CHECK(strcmp(desc->bones[desc->bones[head].parent].name, REF_MOUTH_PARENT_NAME) == 0);
 	}
 	CHECK(desc->bones[0].parent == -1);
 	bool smile = false;
@@ -685,7 +687,7 @@ static void test_describe(void)
 			if (timeline->kind == SPINE_TIMELINE_SLOT && timeline->target == mouth && timeline->attachment_names)
 				mouth_keys = timeline->frame_count > 0 && timeline->frame_times != NULL;
 		}
-		CHECK(slots >= 1 && bones >= 30 && events == 1);
+		CHECK(slots == REF_RUN_SLOT_TIMELINES && bones == REF_RUN_BONE_TIMELINES && events == REF_RUN_EVENT_TIMELINES);
 		CHECK(mouth_keys);
 	}
 	backend->free_asset(asset);
@@ -777,7 +779,7 @@ static void test_bone_access(void)
 	const struct spine_skeleton_desc *desc = backend->describe(asset);
 	struct spine_instance *instance = backend->create_instance(asset);
 	const int head = backend->find_slot_bone(instance, "mouth");
-	CHECK(head >= 0 && strcmp(desc->bones[head].name, "head") == 0);
+	CHECK(head >= 0 && strcmp(desc->bones[head].name, REF_MOUTH_BONE_NAME) == 0);
 	CHECK(backend->find_slot_bone(instance, "nope") == -1);
 	float m[4];
 	CHECK(backend->bone_parent_matrix(instance, head, m));
@@ -803,11 +805,11 @@ static void test_bone_access(void)
 
 int main(void)
 {
-	backend = spine_backend_41();
+	backend = BACKEND_ENTRY();
 	CHECK(backend != NULL);
 	if (!backend)
 		return TEST_RESULT();
-	CHECK(strcmp(backend->name, "4.1") == 0);
+	CHECK(strcmp(backend->name, BACKEND_NAME) == 0);
 	backend->set_allocator(NULL);
 
 	/* First, so spine-c's lazily created statics are allocated under the counting allocator. */

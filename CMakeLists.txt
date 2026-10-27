@@ -119,20 +119,29 @@ target_compile_features(skeleton-version-tests PRIVATE c_std_11)
 target_compile_definitions(skeleton-version-tests PRIVATE TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
 add_test(NAME skeleton-version-tests COMMAND skeleton-version-tests)
 
-add_executable(backend-41-tests tests/backend-41-test.c src/native/atlas-image.c src/native/draw-list.c src/skeleton-binary.c)
-target_include_directories(backend-41-tests PRIVATE src/native tests tests/fixtures)
-target_link_libraries(backend-41-tests PRIVATE spine-backend-41)
-target_compile_features(backend-41-tests PRIVATE c_std_11)
-target_compile_definitions(
-  backend-41-tests
-  PRIVATE
-    TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
-    TEST_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}"
-)
-if(UNIX)
-  target_link_libraries(backend-41-tests PRIVATE m pthread)
-endif()
-add_test(NAME backend-41-tests COMMAND backend-41-tests)
+# One backend test executable per Spine version, sharing tests/backend-test.c.
+function(spine_add_backend_test tag version)
+  add_executable(backend-${tag}-tests tests/backend-test.c src/native/atlas-image.c src/native/draw-list.c src/skeleton-binary.c)
+  target_include_directories(backend-${tag}-tests PRIVATE src/native tests tests/fixtures)
+  target_link_libraries(backend-${tag}-tests PRIVATE spine-backend-${tag})
+  target_compile_features(backend-${tag}-tests PRIVATE c_std_11)
+  target_compile_definitions(
+    backend-${tag}-tests
+    PRIVATE
+      TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+      TEST_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/backend-${tag}"
+      FIXTURE_VERSION_DIR="spine${tag}"
+      REF_HEADER="spine${tag}/reference.h"
+      BACKEND_ENTRY=spine_backend_${tag}
+      BACKEND_NAME="${version}"
+  )
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/backend-${tag}")
+  if(UNIX)
+    target_link_libraries(backend-${tag}-tests PRIVATE m pthread)
+  endif()
+  add_test(NAME backend-${tag}-tests COMMAND backend-${tag}-tests)
+endfunction()
+spine_add_backend_test(41 4.1)
 
 add_executable(framing-tests tests/framing-test.c src/native/framing.c)
 target_include_directories(framing-tests PRIVATE src/native tests)
