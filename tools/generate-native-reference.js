@@ -14,7 +14,7 @@ const root = path.resolve(__dirname, '..');
 const RUNTIMES = {
   '4.1': { file: 'data/player/runtime/4.1.20/spine-player.min.js', label: '4.1.20 web player' },
   '4.0': { file: 'data/player/runtime/4.0.28/spine-player.min.js', label: '4.0.28 web player' },
-  '3.7': { file: 'data/player/runtime/3.7.94/spine-webgl.js', label: '3.7.94 spine-webgl' }
+  '3.7': { file: 'data/player/runtime/3.7.94/spine-webgl.js', label: '3.7.94 spine-webgl + spine37-binary.js' }
 };
 
 function loadSpine(version) {
@@ -28,16 +28,17 @@ function loadSpine(version) {
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(root, RUNTIMES[version].file), 'utf8') + '\n;globalThis.spine = spine;', context);
+  /* The browser reads 3.7 .skel files through the repo's port of the 3.7 binary reader. */
+  if (version === '3.7') vm.runInContext(fs.readFileSync(path.join(root, 'data/player/spine37-binary.js'), 'utf8'), context);
   return context.spine;
 }
 
 function loadSkeleton(spine, version, fixtures) {
   const atlasText = fs.readFileSync(path.join(fixtures, 'spineboy-pma.atlas'), 'utf8').replace(/\r/g, '');
   if (version === '3.7') {
-    /* spine-ts 3.7 only reads JSON; the same export is checked natively as .skel and .json. */
     const atlas = new spine.TextureAtlas(atlasText, () => new spine.FakeTexture({ width: 1024, height: 1024 }));
-    const json = new spine.SkeletonJson(new spine.AtlasAttachmentLoader(atlas));
-    return json.readSkeletonData(fs.readFileSync(path.join(fixtures, 'spineboy-pro.json'), 'utf8'));
+    const binary = new spine.SkeletonBinary(new spine.AtlasAttachmentLoader(atlas));
+    return binary.readSkeletonData(new Uint8Array(fs.readFileSync(path.join(fixtures, 'spineboy-pro.skel'))));
   }
   const atlas = new spine.TextureAtlas(atlasText);
   for (const page of atlas.pages) page.setTexture(new spine.FakeTexture({ width: page.width, height: page.height }));

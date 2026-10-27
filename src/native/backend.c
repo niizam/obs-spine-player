@@ -1,5 +1,5 @@
-/* Spine 4.0 / 4.1 backend. Compiled once per version with SPINE_BACKEND_VERSION
- * (40 or 41) and the matching forced include spine<ver>-prefix.h, so every
+/* Spine 3.7 / 4.0 / 4.1 backend. Compiled once per version with SPINE_BACKEND_VERSION
+ * (37, 40 or 41) and the matching forced include spine<ver>-prefix.h, so every
  * spine-c name used here resolves to that version's prefixed runtime.
  * Everything except spine_backend_<ver>() is static to keep the library's
  * exported names prefixed. */
@@ -12,8 +12,12 @@
 #define BACKEND_NAME "4.0"
 #define BACKEND_BINARY_FORMAT SKELETON_BINARY_40
 #define BACKEND_ENTRY spine_backend_40
+#elif SPINE_BACKEND_VERSION == 37
+#define BACKEND_NAME "3.7"
+#define BACKEND_BINARY_FORMAT SKELETON_BINARY_37
+#define BACKEND_ENTRY spine_backend_37
 #else
-#error "SPINE_BACKEND_VERSION must be 40 or 41"
+#error "SPINE_BACKEND_VERSION must be 37, 40 or 41"
 #endif
 
 #include "spine-backend.h"
@@ -31,6 +35,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* API differences between spine-c 3.7 and 4.x. */
+#if SPINE_BACKEND_VERSION >= 40
+#define TIMELINE_COUNT(animation) ((animation)->timelines->size)
+#define TIMELINE_AT(animation, index) ((animation)->timelines->items[index])
+#define BONE_ACTIVE(bone) ((bone)->active)
+#define SKIN_ENTRIES(skin) spSkin_getAttachments(skin)
+typedef spSkinEntry skin_entry;
+#else
+#define TIMELINE_COUNT(animation) ((animation)->timelinesCount)
+#define TIMELINE_AT(animation, index) ((animation)->timelines[index])
+#define BONE_ACTIVE(bone) 1 /* 3.7 has no inactive bones */
+#define SKIN_ENTRIES(skin) (((const _spSkin *)(skin))->entries)
+typedef _Entry skin_entry;
+#endif
 
 struct spine_asset {
 	spAtlas *atlas;
@@ -389,8 +408,12 @@ static const char *animation_name(const struct spine_asset *asset, size_t index)
 /* Frees an overlay's own memory only; its timelines belong to the source animation. */
 static void free_overlay(spAnimation *overlay)
 {
+#if SPINE_BACKEND_VERSION >= 40
 	spPropertyIdArray_dispose(overlay->timelineIds);
 	spTimelineArray_dispose(overlay->timelines);
+#else
+	FREE(overlay->timelines);
+#endif
 	FREE(overlay->name);
 	FREE(overlay);
 }
@@ -523,7 +546,7 @@ static bool skeleton_bounds(struct spine_instance *instance, float *min_x, float
 	bool found = false;
 	for (int index = 0; index < skeleton->slotsCount; index++) {
 		spSlot *slot = skeleton->drawOrder[index];
-		if (!slot->bone->active || !slot->attachment)
+		if (!BONE_ACTIVE(slot->bone) || !slot->attachment)
 			continue;
 		const int count = attachment_world_vertices(instance, slot, slot->attachment);
 		for (int i = 0; i + 1 < count; i += 2) {
@@ -564,6 +587,9 @@ static bool animation_bounds(struct spine_instance *instance, const char *name, 
 	spSkeleton_setToSetupPose(skeleton);
 	float time = 0.0f;
 	for (int sample = 0; sample < steps; sample++, time += step) {
+#if SPINE_BACKEND_VERSION < 40
+		spSkeleton_setToSetupPose(skeleton); /* spine37-player.js resets before every sample */
+#endif
 		spAnimation_apply(animation, skeleton, time, time, 0, NULL, NULL, 1.0f, SP_MIX_BLEND_SETUP,
 				  SP_MIX_DIRECTION_IN);
 		spSkeleton_updateWorldTransform(skeleton);
@@ -571,6 +597,10 @@ static bool animation_bounds(struct spine_instance *instance, const char *name, 
 		if (!skeleton_bounds(instance, &x0, &y0, &x1, &y1) || !is_finite(x0) || !is_finite(y0) ||
 		    !is_finite(x1) || !is_finite(y1))
 			continue;
+#if SPINE_BACKEND_VERSION < 40
+		if (!(x1 > x0) || !(y1 > y0))
+			continue; /* spine37-player.js skips empty samples */
+#endif
 		if (!found) {
 			min_x = x0, min_y = y0, max_x = x1, max_y = y1;
 			found = true;
@@ -633,7 +663,7 @@ static bool build_draw_list(struct spine_instance *instance, struct spine_draw_l
 	for (int index = 0; index < skeleton->slotsCount; index++) {
 		spSlot *slot = skeleton->drawOrder[index];
 		spAttachment *attachment = slot->attachment;
-		if (!attachment || !slot->bone->active) {
+		if (!attachment || !BONE_ACTIVE(slot->bone)) {
 			spSkeletonClipping_clipEnd(clipper, slot);
 			continue;
 		}
@@ -742,6 +772,32 @@ static bool build_draw_list(struct spine_instance *instance, struct spine_draw_l
 static enum spine_timeline_kind timeline_target(const spTimeline *timeline, int *target)
 {
 	*target = -1;
+#if SPINE_BACKEND_VERSION < 40
+	switch (timeline->type) {
+	case SP_TIMELINE_ATTACHMENT:
+		*target = ((const spAttachmentTimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_COLOR:
+		*target = ((const spColorTimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_TWOCOLOR:
+		*target = ((const spTwoColorTimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_DEFORM:
+		*target = ((const spDeformTimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_ROTATE:
+	case SP_TIMELINE_TRANSLATE:
+	case SP_TIMELINE_SCALE:
+	case SP_TIMELINE_SHEAR:
+		*target = ((const spBaseTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_EVENT:
+		return SPINE_TIMELINE_EVENT;
+	default:
+		return SPINE_TIMELINE_OTHER;
+	}
+#else
 	switch (timeline->type) {
 	case SP_TIMELINE_ATTACHMENT:
 		*target = ((const spAttachmentTimeline *)timeline)->slotIndex;
@@ -804,6 +860,25 @@ static enum spine_timeline_kind timeline_target(const spTimeline *timeline, int 
 	default:
 		return SPINE_TIMELINE_OTHER;
 	}
+#endif
+}
+
+static int attachment_key_count(const spTimeline *timeline)
+{
+#if SPINE_BACKEND_VERSION >= 40
+	return timeline->frameCount;
+#else
+	return ((const spAttachmentTimeline *)timeline)->framesCount;
+#endif
+}
+
+static float attachment_key_time(const spTimeline *timeline, int key)
+{
+#if SPINE_BACKEND_VERSION >= 40
+	return timeline->frames->items[key * timeline->frameEntries];
+#else
+	return ((const spAttachmentTimeline *)timeline)->frames[key];
+#endif
 }
 
 static struct description *build_description(const spSkeletonData *data)
@@ -813,14 +888,14 @@ static struct description *build_description(const spSkeletonData *data)
 		return NULL;
 	size_t timeline_total = 0, time_total = 0, skin_total = 0;
 	for (int a = 0; a < data->animationsCount; a++) {
-		const spTimelineArray *timelines = data->animations[a]->timelines;
-		timeline_total += (size_t)timelines->size;
-		for (int t = 0; t < timelines->size; t++)
-			if (timelines->items[t]->type == SP_TIMELINE_ATTACHMENT)
-				time_total += (size_t)timelines->items[t]->frameCount;
+		const spAnimation *animation = data->animations[a];
+		timeline_total += (size_t)TIMELINE_COUNT(animation);
+		for (int t = 0; t < TIMELINE_COUNT(animation); t++)
+			if (TIMELINE_AT(animation, t)->type == SP_TIMELINE_ATTACHMENT)
+				time_total += (size_t)attachment_key_count(TIMELINE_AT(animation, t));
 	}
 	for (int s = 0; s < data->skinsCount; s++)
-		for (const spSkinEntry *entry = spSkin_getAttachments(data->skins[s]); entry; entry = entry->next)
+		for (const skin_entry *entry = SKIN_ENTRIES(data->skins[s]); entry; entry = entry->next)
 			skin_total++;
 
 	description->slots = calloc(data->slotsCount ? (size_t)data->slotsCount : 1, sizeof(*description->slots));
@@ -846,28 +921,28 @@ static struct description *build_description(const spSkeletonData *data)
 	for (int a = 0; a < data->animationsCount; a++) {
 		const spAnimation *animation = data->animations[a];
 		struct spine_desc_timeline *first = &description->timelines[next_timeline];
-		for (int t = 0; t < animation->timelines->size; t++) {
-			const spTimeline *timeline = animation->timelines->items[t];
+		for (int t = 0; t < TIMELINE_COUNT(animation); t++) {
+			const spTimeline *timeline = TIMELINE_AT(animation, t);
 			struct spine_desc_timeline *out = &description->timelines[next_timeline++];
 			out->kind = timeline_target(timeline, &out->target);
-			out->frame_count = timeline->frameCount;
 			if (timeline->type == SP_TIMELINE_ATTACHMENT) {
+				out->frame_count = attachment_key_count(timeline);
 				float *times = &description->times[next_time];
-				for (int k = 0; k < timeline->frameCount; k++)
-					times[k] = timeline->frames->items[k * timeline->frameEntries];
-				next_time += (size_t)timeline->frameCount;
+				for (int k = 0; k < out->frame_count; k++)
+					times[k] = attachment_key_time(timeline, k);
+				next_time += (size_t)out->frame_count;
 				out->frame_times = times;
 				out->attachment_names =
 					(const char *const *)((const spAttachmentTimeline *)timeline)->attachmentNames;
 			}
 		}
 		description->animations[a] = (struct spine_desc_animation){animation->name, animation->duration,
-									   animation->timelines->size, first};
+									   TIMELINE_COUNT(animation), first};
 	}
 
 	size_t next_skin = 0;
 	for (int s = 0; s < data->skinsCount; s++)
-		for (const spSkinEntry *entry = spSkin_getAttachments(data->skins[s]); entry; entry = entry->next)
+		for (const skin_entry *entry = SKIN_ENTRIES(data->skins[s]); entry; entry = entry->next)
 			description->skin_attachments[next_skin++] =
 				(struct spine_desc_skin_attachment){entry->slotIndex, entry->name};
 
@@ -918,14 +993,14 @@ static bool set_overlay(struct spine_instance *instance, int track, int source_a
 		return false;
 	spAnimation *source = instance->asset->skeleton_data->animations[source_animation];
 	for (size_t i = 0; i < count; i++)
-		if (timelines[i] < 0 || timelines[i] >= source->timelines->size)
+		if (timelines[i] < 0 || timelines[i] >= TIMELINE_COUNT(source))
 			return false;
 	/* Yap toggles reuse the latest overlay when it is built from the same timelines. */
 	if (instance->overlay_count) {
 		spAnimation *last = instance->overlays[instance->overlay_count - 1];
-		bool same = last->timelines->size == (int)count && last->duration == source->duration;
+		bool same = TIMELINE_COUNT(last) == (int)count && last->duration == source->duration;
 		for (size_t i = 0; same && i < count; i++)
-			same = last->timelines->items[i] == source->timelines->items[timelines[i]];
+			same = TIMELINE_AT(last, i) == TIMELINE_AT(source, timelines[i]);
 		if (same) {
 			spTrackEntry *entry = spAnimationState_setAnimation(instance->state, track, last, loop ? 1 : 0);
 			if (entry) {
@@ -944,12 +1019,21 @@ static bool set_overlay(struct spine_instance *instance, int track, int source_a
 		instance->overlay_capacity = capacity;
 	}
 
+#if SPINE_BACKEND_VERSION >= 40
 	spTimelineArray *shared = spTimelineArray_create((int)count);
 	for (size_t i = 0; i < count; i++)
 		spTimelineArray_add(shared, source->timelines->items[timelines[i]]);
+#endif
 	char name[512];
 	snprintf(name, sizeof(name), "%s (mouth)", source->name);
+#if SPINE_BACKEND_VERSION >= 40
 	spAnimation *overlay = spAnimation_create(name, shared, source->duration);
+#else
+	spAnimation *overlay = spAnimation_create(name, (int)count);
+	for (size_t i = 0; i < count; i++)
+		overlay->timelines[i] = source->timelines[timelines[i]];
+	overlay->duration = source->duration;
+#endif
 	instance->overlays[instance->overlay_count++] = overlay;
 
 	spTrackEntry *entry = spAnimationState_setAnimation(instance->state, track, overlay, loop ? 1 : 0);
@@ -1004,6 +1088,17 @@ static void update_world_transform(struct spine_instance *instance)
 		spSkeleton_updateWorldTransform(instance->skeleton);
 }
 
+#if SPINE_BACKEND_VERSION < 40
+/* spine-ts 3.7 with premultiplied alpha: gl.blendFunc(src, dst), so alpha uses the
+ * same factors; for alpha, DST_COLOR means destination alpha. */
+static const struct spine_blend_factors blend_factors[4] = {
+	[SPINE_BLEND_NORMAL] = {SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA, SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA},
+	[SPINE_BLEND_ADDITIVE] = {SPINE_FACTOR_ONE, SPINE_FACTOR_ONE, SPINE_FACTOR_ONE, SPINE_FACTOR_ONE},
+	[SPINE_BLEND_MULTIPLY] = {SPINE_FACTOR_DST_COLOR, SPINE_FACTOR_INV_SRC_ALPHA, SPINE_FACTOR_DST_ALPHA,
+				  SPINE_FACTOR_INV_SRC_ALPHA},
+	[SPINE_BLEND_SCREEN] = {SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA, SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA},
+};
+#else
 /* spine-ts 4.x with premultiplied alpha: separate colour and alpha factors. */
 static const struct spine_blend_factors blend_factors[4] = {
 	[SPINE_BLEND_NORMAL] = {SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA, SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA},
@@ -1013,6 +1108,7 @@ static const struct spine_blend_factors blend_factors[4] = {
 	[SPINE_BLEND_SCREEN] = {SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA, SPINE_FACTOR_INV_SRC_COLOR,
 				SPINE_FACTOR_INV_SRC_ALPHA},
 };
+#endif
 
 static const struct spine_backend backend = {
 	.name = BACKEND_NAME,
