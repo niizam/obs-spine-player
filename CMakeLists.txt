@@ -47,6 +47,8 @@ target_sources(
     src/native/mouth-plan.h
     src/native/state-machine.c
     src/native/state-machine.h
+    src/native/eye-tracker.c
+    src/native/eye-tracker.h
 )
 target_include_directories(obs-spine-player PRIVATE src src/native)
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
@@ -151,6 +153,14 @@ if(UNIX)
   target_link_libraries(state-machine-tests PRIVATE m)
 endif()
 add_test(NAME state-machine-tests COMMAND state-machine-tests)
+
+add_executable(eye-tracker-tests tests/eye-tracker-test.c src/native/eye-tracker.c)
+target_include_directories(eye-tracker-tests PRIVATE src/native tests)
+target_compile_features(eye-tracker-tests PRIVATE c_std_11)
+if(UNIX)
+  target_link_libraries(eye-tracker-tests PRIVATE m)
+endif()
+add_test(NAME eye-tracker-tests COMMAND eye-tracker-tests)
 
 add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
 target_include_directories(level-gate-tests PRIVATE src)
