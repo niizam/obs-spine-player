@@ -126,7 +126,7 @@ add_test(NAME skeleton-version-tests COMMAND skeleton-version-tests)
 # One backend test executable per Spine version, sharing tests/backend-test.c.
 function(spine_add_backend_test tag version)
   add_executable(backend-${tag}-tests tests/backend-test.c src/native/atlas-image.c src/native/draw-list.c src/native/skeleton-version.c src/skeleton-binary.c)
-  target_include_directories(backend-${tag}-tests PRIVATE src/native tests tests/fixtures)
+  target_include_directories(backend-${tag}-tests PRIVATE src src/native tests tests/fixtures)
   target_link_libraries(backend-${tag}-tests PRIVATE spine-backend-${tag})
   target_compile_features(backend-${tag}-tests PRIVATE c_std_11)
   target_compile_definitions(
