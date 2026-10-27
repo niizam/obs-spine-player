@@ -262,3 +262,30 @@ spine-c and the Spineboy fixture come from the Spine Runtimes repository, under 
 - **Missed renamed symbols** only cause harm once a second runtime is linked. The prefix check catches them in stage 1 already.
 - **Atlases straight from older exporters** are not truly premultiplied. They look the same as in the browser (same assumption), so parity holds. Fixing that belongs to a later stage.
 - **The mouth overlay's shared timelines** (stage 2) must not be freed twice by `spAnimation_dispose`. This is recorded here so the stage 2 spec handles it.
+
+## Erratum (implementation, 2026-10-27)
+
+Where the code differs from this spec, the code is right. Later stages should follow these points:
+
+- **Blend factors.** They are copied from the bundled spine-ts 4.1 runtime, not from the table above:
+
+  | Mode | Colour (src, dst) | Alpha (src, dst) |
+  |---|---|---|
+  | Normal | `ONE, INVSRCALPHA` | `ONE, INVSRCALPHA` |
+  | Additive | `ONE, ONE` | `ONE, ONE` |
+  | Multiply | `DSTCOLOR, INVSRCALPHA` | `INVSRCALPHA, INVSRCALPHA` |
+  | Screen | `ONE, INVSRCALPHA` | `INVSRCCOLOR, INVSRCALPHA` |
+
+  Screen is not visually verified: no available asset uses it.
+- **Dark colour.** It is `(0, 0, 0, 1)` when the slot has no dark colour, and `(dark × alpha, 1)` otherwise, as in spine-ts.
+- **Backend interface additions.**
+  - `release_page_images()` frees the CPU pixels after GPU upload.
+  - `shutdown()` frees spine-c's static empty animation; it is called from `obs_module_unload`.
+  - `spine_draw_vertex.dark` is `float[4]`.
+  - The image decoder also has `read_file`, so all file access is UTF-8 safe.
+- **Allocation.**
+  - The backend rounds zero-byte requests up to one byte, because OBS's `bmalloc` treats a zero-byte allocation as fatal.
+  - `.skel` files are validated by `src/skeleton-binary.c` before spine-c reads them.
+- **Skeleton format.** A skeleton is treated as JSON only for a `.json` extension; anything else is binary, as in the browser player.
+- **Drawing.** The skeleton is drawn once per OBS frame. Further views (Studio Mode, projectors) reuse the offscreen texture.
+- **Fallback.** The switch to the browser renderer runs on the UI thread (`obs_queue_task`), not in `video_tick`.

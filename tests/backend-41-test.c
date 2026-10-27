@@ -580,6 +580,47 @@ static void test_no_leaks_after_shutdown(void)
 	backend->set_allocator(NULL);
 }
 
+static void test_crlf_atlas(void)
+{
+	/* Atlases checked out or exported on Windows often have CRLF line endings. */
+	size_t size = 0;
+	char *text = read_all(FIXTURE("spineboy-pma.atlas"), &size);
+	CHECK(text != NULL);
+	if (!text)
+		return;
+	char *crlf = malloc(size * 2 + 1);
+	size_t length = 0;
+	for (size_t i = 0; i < size; i++) {
+		if (text[i] == '\r')
+			continue;
+		if (text[i] == '\n')
+			crlf[length++] = '\r';
+		crlf[length++] = text[i];
+	}
+	char directory[1024], atlas[1100], page[1100];
+	snprintf(directory, sizeof(directory), "%s/backend41-crlf", TEST_OUTPUT_DIR);
+	CHECK(make_dir(directory));
+	snprintf(atlas, sizeof(atlas), "%s/spineboy-pma.atlas", directory);
+	snprintf(page, sizeof(page), "%s/spineboy-pma.png", directory);
+	CHECK(write_all(atlas, crlf, length));
+	CHECK(copy_file(FIXTURE("spineboy-pma.png"), page));
+	free(crlf);
+	free(text);
+	char error[512] = "";
+	struct spine_asset *asset = load(FIXTURE("spineboy-pro.skel"), atlas, error, sizeof(error));
+	CHECK(asset != NULL);
+	if (asset) {
+		struct spine_instance *instance = backend->create_instance(asset);
+		struct spine_draw_list list = {0};
+		CHECK(backend->build_draw_list(instance, &list) && list.batch_count >= 1);
+		spine_draw_list_free(&list);
+		backend->free_instance(instance);
+		backend->free_asset(asset);
+	} else {
+		fprintf(stderr, "crlf load error: %s\n", error);
+	}
+}
+
 int main(void)
 {
 	backend = spine_backend_41();
@@ -608,5 +649,6 @@ int main(void)
 	test_non_json_extension_reads_binary();
 	test_release_page_images();
 	test_no_zero_size_allocations();
+	test_crlf_atlas();
 	return TEST_RESULT();
 }
