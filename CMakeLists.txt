@@ -34,6 +34,9 @@ target_sources(
     src/native/atlas-image.h
     src/native/skeleton-version.c
     src/native/skeleton-version.h
+    src/native/draw-list.c
+    src/native/draw-list.h
+    src/native/spine-backend.h
 )
 target_include_directories(obs-spine-player PRIVATE src src/native)
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
@@ -99,6 +102,21 @@ target_include_directories(skeleton-version-tests PRIVATE src src/native tests)
 target_compile_features(skeleton-version-tests PRIVATE c_std_11)
 target_compile_definitions(skeleton-version-tests PRIVATE TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
 add_test(NAME skeleton-version-tests COMMAND skeleton-version-tests)
+
+add_executable(backend-41-tests tests/backend-41-test.c src/native/atlas-image.c src/native/draw-list.c src/skeleton-binary.c)
+target_include_directories(backend-41-tests PRIVATE src/native tests)
+target_link_libraries(backend-41-tests PRIVATE spine-backend-41)
+target_compile_features(backend-41-tests PRIVATE c_std_11)
+target_compile_definitions(
+  backend-41-tests
+  PRIVATE
+    TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    TEST_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}"
+)
+if(UNIX)
+  target_link_libraries(backend-41-tests PRIVATE m pthread)
+endif()
+add_test(NAME backend-41-tests COMMAND backend-41-tests)
 
 add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
 target_include_directories(level-gate-tests PRIVATE src)
