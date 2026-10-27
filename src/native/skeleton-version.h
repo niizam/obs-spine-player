@@ -13,7 +13,7 @@ enum spine_family {
 
 /* Reads the editor version from a skeleton export (the "spine" field of JSON,
  * or the binary header) and maps it to a runtime family with the same rule as
- * data/player/version-detector.js. The version string, when found, is copied
+ * tools/spine-ts/version-detector.js. The version string, when found, is copied
  * into version even for unsupported families. */
 enum spine_family skeleton_version_detect(const uint8_t *data, size_t size, bool is_json, char *version,
 					  size_t version_size);

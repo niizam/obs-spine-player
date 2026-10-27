@@ -1,7 +1,7 @@
 #pragma once
 
-/* Decides what yap mode plays on the mouth track. C port of
- * data/player/mouth-overlay.js: a dedicated talk_start animation plays as is;
+/* Decides what yap mode plays on the mouth track. Ported from
+ * the former browser player: a dedicated talk_start animation plays as is;
  * otherwise a clip that keys a "talk" mouth attachment is reduced to the
  * timelines of the mouth slots (and bones used only by them) and looped over
  * its talking stretch. Version-neutral: reads a spine_skeleton_desc only. */

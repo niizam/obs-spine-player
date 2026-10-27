@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-/* Uses the bundled Spine web runtime of one version (what the browser renderer
- * runs) to write reference numbers for the native backend's parity tests:
+/* Uses the bundled Spine web runtime of one version (tools/spine-ts, the
+ * reference implementation) to write reference numbers for the native backend's parity tests:
  *   node tools/generate-native-reference.js 4.1   (also 4.0, 3.7)
  * Output: tests/fixtures/spine<ver without dot>/reference.h */
 
@@ -28,7 +28,7 @@ function loadSpine(version) {
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(root, RUNTIMES[version].file), 'utf8') + '\n;globalThis.spine = spine;', context);
-  /* The browser reads 3.7 .skel files through the repo's port of the 3.7 binary reader. */
+  /* spine-ts 3.7 only reads JSON; .skel files go through the repo's port of the 3.7 binary reader. */
   if (version === '3.7') vm.runInContext(fs.readFileSync(path.join(root, 'tools/spine-ts/spine37-binary.js'), 'utf8'), context);
   return context.spine;
 }

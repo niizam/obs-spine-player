@@ -1,7 +1,7 @@
 #pragma once
 
-/* Emotion state machine and yap (mouth track) control. C port of
- * data/player/state-controller.js. Track 0 holds the base state (default
+/* Emotion state machine and yap (mouth track) control. Ported from
+ * the former browser player. Track 0 holds the base state (default
  * animation, looping emotions, one-shot actions that return to the default);
  * track 1 holds the mouth while yapping. Version-neutral: it drives the
  * runtime only through state_machine_ops. */

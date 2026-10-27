@@ -1,6 +1,6 @@
 #pragma once
 
-/* Cursor eye tracking. C port of data/player/eye-tracker.js: configured eye
+/* Cursor eye tracking. Ported from the former browser player: configured eye
  * slots resolve to their bones; after each animation update the bones get an
  * additive screen-space offset (converted through the parent's inverse
  * transform), which is removed again before the next update so it never
