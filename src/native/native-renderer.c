@@ -70,6 +70,11 @@ struct native_renderer {
 	char resolved[256];  /* animation actually playing on track 0 */
 	uint32_t frame_width, frame_height;
 	bool framed;
+	/* The pose changed since the offscreen texture was drawn. OBS calls
+	 * video_render once per view (program, preview, projectors), so the
+	 * skeleton is drawn once per frame and every view reuses the texture. */
+	bool needs_redraw;
+	bool has_drawing;
 	float ortho_left, ortho_right, ortho_top, ortho_bottom;
 };
 
@@ -439,6 +444,7 @@ static void adopt_posted(struct native_renderer *renderer)
 		}
 	}
 	renderer->draw_failed_logged = false;
+	renderer->needs_redraw = true;
 	free_result(renderer, result);
 }
 
@@ -502,6 +508,7 @@ static void apply_config(struct native_renderer *renderer)
 						      &renderer->ortho_right, &renderer->ortho_top,
 						      &renderer->ortho_bottom);
 	snprintf(renderer->animation, sizeof(renderer->animation), "%s", animation);
+	renderer->needs_redraw = true;
 	renderer->frame_width = width;
 	renderer->frame_height = height;
 }
@@ -674,6 +681,7 @@ void native_renderer_tick(struct native_renderer *renderer, float seconds)
 	if (!renderer || !renderer->instance || !obs_source_showing(renderer->owner))
 		return;
 	renderer->backend->update(renderer->instance, seconds);
+	renderer->needs_redraw = true;
 }
 
 void native_renderer_render(struct native_renderer *renderer)
@@ -684,22 +692,28 @@ void native_renderer_render(struct native_renderer *renderer)
 	apply_config(renderer);
 	if (!renderer->instance || !renderer->framed || !renderer->frame_width || !renderer->frame_height)
 		return;
-	if (!ensure_effect(renderer))
-		return;
-	if (!renderer->backend->build_draw_list(renderer->instance, &renderer->list)) {
-		if (!renderer->draw_failed_logged)
-			native_log(renderer, LOG_ERROR, "native renderer ran out of memory building the draw list");
-		renderer->draw_failed_logged = true;
-		return;
+	if (renderer->needs_redraw || !renderer->has_drawing) {
+		renderer->needs_redraw = false;
+		renderer->has_drawing = false;
+		if (!ensure_effect(renderer))
+			return;
+		if (!renderer->backend->build_draw_list(renderer->instance, &renderer->list)) {
+			if (!renderer->draw_failed_logged)
+				native_log(renderer, LOG_ERROR,
+					   "native renderer ran out of memory building the draw list");
+			renderer->draw_failed_logged = true;
+			return;
+		}
+		if (!renderer->list.batch_count)
+			return;
+		if (!upload_buffers(renderer)) {
+			if (!renderer->draw_failed_logged)
+				native_log(renderer, LOG_ERROR, "native renderer could not create vertex buffers");
+			renderer->draw_failed_logged = true;
+			return;
+		}
+		renderer->has_drawing = draw_skeleton(renderer, renderer->frame_width, renderer->frame_height);
 	}
-	if (!renderer->list.batch_count)
-		return;
-	if (!upload_buffers(renderer)) {
-		if (!renderer->draw_failed_logged)
-			native_log(renderer, LOG_ERROR, "native renderer could not create vertex buffers");
-		renderer->draw_failed_logged = true;
-		return;
-	}
-	if (draw_skeleton(renderer, renderer->frame_width, renderer->frame_height))
+	if (renderer->has_drawing)
 		composite(renderer, renderer->frame_width, renderer->frame_height);
 }
