@@ -18,6 +18,7 @@
 #define SETTING_RENDERER "renderer"
 #define RENDERER_BROWSER "browser"
 #define RENDERER_NATIVE "native"
+#define SETTING_NATIVE_AA "native_aa"
 #define SETTING_RUNTIME "runtime"
 #define SETTING_DEFAULT_ANIMATION "default_animation"
 #define SETTING_WIDTH "width"
@@ -676,6 +677,8 @@ static void spine_source_update(void *data, obs_data_t *settings)
 		if (selection_changed || native_created)
 			native_renderer_load(context->native, core_path, atlas_path, spine_family_from_setting(runtime));
 		native_renderer_configure(context->native, default_animation, context->width, context->height);
+		native_renderer_set_antialiasing(context->native,
+						 native_aa_from_setting(obs_data_get_string(settings, SETTING_NATIVE_AA)));
 	}
 	connect_audio_source(context, obs_data_get_string(settings, SETTING_YAP_AUDIO_SOURCE));
 	if (!context->yap_enabled) {
@@ -812,6 +815,7 @@ static void spine_source_defaults(obs_data_t *settings)
 {
 	static const bool default_loops[EMOTION_COUNT] = {true, true, true, true, false, false, false, true};
 	obs_data_set_default_string(settings, SETTING_RENDERER, RENDERER_BROWSER);
+	obs_data_set_default_string(settings, SETTING_NATIVE_AA, "off");
 	obs_data_set_default_string(settings, SETTING_RUNTIME, "auto");
 	obs_data_set_default_string(settings, SETTING_DEFAULT_ANIMATION, "idle");
 	obs_data_set_default_int(settings, SETTING_WIDTH, 1080);
@@ -853,6 +857,15 @@ static bool add_audio_source(void *data, obs_source_t *source)
 		const char *name = obs_source_get_name(source);
 		obs_property_list_add_string(list->property, name, name);
 	}
+	return true;
+}
+
+static bool renderer_modified(obs_properties_t *properties, obs_property_t *property, obs_data_t *settings)
+{
+	const char *renderer = obs_data_get_string(settings, SETTING_RENDERER);
+	obs_property_set_visible(obs_properties_get(properties, SETTING_NATIVE_AA),
+				 renderer && strcmp(renderer, RENDERER_NATIVE) == 0);
+	UNUSED_PARAMETER(property);
 	return true;
 }
 
@@ -982,6 +995,15 @@ static obs_properties_t *spine_source_properties(void *data)
 	obs_property_list_add_string(renderer, obs_module_text("Renderer.Browser"), RENDERER_BROWSER);
 	obs_property_list_add_string(renderer, obs_module_text("Renderer.Native"), RENDERER_NATIVE);
 	obs_property_set_long_description(renderer, obs_module_text("Renderer.Help"));
+	obs_property_set_modified_callback(renderer, renderer_modified);
+	obs_property_t *antialiasing = obs_properties_add_list(properties, SETTING_NATIVE_AA,
+							       obs_module_text("NativeAntialiasing"),
+							       OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(antialiasing, obs_module_text("NativeAntialiasing.Off"), "off");
+	obs_property_list_add_string(antialiasing, obs_module_text("NativeAntialiasing.Fxaa"), "fxaa");
+	obs_property_list_add_string(antialiasing, obs_module_text("NativeAntialiasing.Ss15"), "ss15");
+	obs_property_list_add_string(antialiasing, obs_module_text("NativeAntialiasing.Ss2"), "ss2");
+	obs_property_set_long_description(antialiasing, obs_module_text("NativeAntialiasing.Help"));
 	obs_property_t *runtime = obs_properties_add_list(properties, SETTING_RUNTIME, obs_module_text("RuntimeVersion"),
 							OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(runtime, obs_module_text("RuntimeAuto"), "auto");

@@ -5,6 +5,7 @@
  * resources or the animated skeleton runs on the OBS graphics thread
  * (video_tick / video_render). */
 
+#include "antialiasing.h"
 #include "skeleton-version.h"
 
 #include <obs.h>
@@ -48,6 +49,8 @@ void native_renderer_set_cursor(struct native_renderer *renderer, float x, float
 /* Emotion/action hotkeys; queued in order (oldest dropped beyond 8). */
 void native_renderer_trigger(struct native_renderer *renderer, const char *animation, bool loop);
 void native_renderer_reset(struct native_renderer *renderer);
+/* Any thread. Anti-aliasing mode; applied on the next render. */
+void native_renderer_set_antialiasing(struct native_renderer *renderer, enum native_aa mode);
 /* Graphics thread. Applies control input; animates only while the owning source is showing. */
 void native_renderer_tick(struct native_renderer *renderer, float seconds);
 /* Graphics thread. */

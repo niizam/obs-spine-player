@@ -68,6 +68,7 @@ struct native_renderer {
 	bool cursor_changed;
 	struct native_command commands[NATIVE_COMMAND_CAPACITY];
 	size_t command_head, command_count;
+	enum native_aa antialiasing;
 
 	/* Graphics thread only. */
 	struct state_machine *machine;
@@ -86,6 +87,10 @@ struct native_renderer {
 	gs_effect_t *effect;
 	gs_eparam_t *image_param;
 	bool effect_failed;
+	enum native_aa applied_aa;
+	gs_effect_t *fxaa_effect;
+	bool fxaa_failed;
+	uint32_t render_width, render_height; /* offscreen texture size */
 	bool draw_failed_logged;
 	struct spine_draw_list list;
 	char animation[256]; /* requested default animation the framing was computed for */
@@ -494,6 +499,7 @@ void native_renderer_destroy(struct native_renderer *renderer)
 	gs_indexbuffer_destroy(renderer->index_buffer);
 	gs_texrender_destroy(renderer->texrender);
 	gs_effect_destroy(renderer->effect);
+	gs_effect_destroy(renderer->fxaa_effect);
 	obs_leave_graphics();
 
 	free_result(renderer, renderer->posted);
@@ -850,13 +856,49 @@ static bool draw_skeleton(struct native_renderer *renderer, uint32_t width, uint
 	return true;
 }
 
-/* Same compositing as obs-browser: sRGB decode, premultiplied ONE / INVSRCALPHA. */
+static gs_effect_t *fxaa_effect(struct native_renderer *renderer)
+{
+	if (renderer->fxaa_effect || renderer->fxaa_failed)
+		return renderer->fxaa_effect;
+	char *path = obs_module_file("effects/spine-fxaa.effect");
+	char *errors = NULL;
+	renderer->fxaa_effect = path ? gs_effect_create_from_file(path, &errors) : NULL;
+	if (!renderer->fxaa_effect) {
+		native_log(renderer, LOG_ERROR, "FXAA is unavailable, drawing without it: %s",
+			   errors ? errors : path ? "unknown error" : "effects/spine-fxaa.effect is missing");
+		renderer->fxaa_failed = true;
+	}
+	bfree(errors);
+	bfree(path);
+	return renderer->fxaa_effect;
+}
+
+/* Same compositing as obs-browser (sRGB decode, premultiplied ONE / INVSRCALPHA),
+ * through FXAA or an area downscale when anti-aliasing asks for it. */
 static void composite(struct native_renderer *renderer, uint32_t width, uint32_t height)
 {
 	gs_texture_t *texture = gs_texrender_get_texture(renderer->texrender);
 	if (!texture)
 		return;
-	gs_effect_t *effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+	gs_effect_t *effect = NULL;
+	if (renderer->applied_aa == NATIVE_AA_FXAA) {
+		effect = fxaa_effect(renderer);
+		if (effect) {
+			struct vec2 texel;
+			vec2_set(&texel, 1.0f / (float)renderer->render_width, 1.0f / (float)renderer->render_height);
+			gs_effect_set_vec2(gs_effect_get_param_by_name(effect, "texel"), &texel);
+		}
+	} else if (renderer->render_width != width || renderer->render_height != height) {
+		effect = obs_get_base_effect(OBS_EFFECT_AREA);
+		struct vec2 base, base_i;
+		vec2_set(&base, (float)renderer->render_width, (float)renderer->render_height);
+		vec2_set(&base_i, 1.0f / (float)renderer->render_width, 1.0f / (float)renderer->render_height);
+		gs_effect_set_vec2(gs_effect_get_param_by_name(effect, "base_dimension"), &base);
+		gs_effect_set_vec2(gs_effect_get_param_by_name(effect, "base_dimension_i"), &base_i);
+	}
+	if (!effect)
+		effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+
 	const bool previous_srgb = gs_framebuffer_srgb_enabled();
 	gs_enable_framebuffer_srgb(true);
 	gs_blend_state_push();
@@ -954,6 +996,15 @@ void native_renderer_set_yapping(struct native_renderer *renderer, bool active)
 	pthread_mutex_unlock(&renderer->mutex);
 }
 
+void native_renderer_set_antialiasing(struct native_renderer *renderer, enum native_aa mode)
+{
+	if (!renderer)
+		return;
+	pthread_mutex_lock(&renderer->mutex);
+	renderer->antialiasing = mode;
+	pthread_mutex_unlock(&renderer->mutex);
+}
+
 void native_renderer_set_cursor(struct native_renderer *renderer, float x, float y)
 {
 	if (!renderer)
@@ -1002,6 +1053,19 @@ void native_renderer_render(struct native_renderer *renderer)
 	apply_config(renderer);
 	if (!renderer->instance || !renderer->framed || !renderer->frame_width || !renderer->frame_height)
 		return;
+	pthread_mutex_lock(&renderer->mutex);
+	const enum native_aa antialiasing = renderer->antialiasing;
+	pthread_mutex_unlock(&renderer->mutex);
+	uint32_t render_width, render_height;
+	native_aa_render_size(antialiasing, renderer->frame_width, renderer->frame_height, NATIVE_MAX_TEXTURE_SIZE,
+			      &render_width, &render_height);
+	if (antialiasing != renderer->applied_aa || render_width != renderer->render_width ||
+	    render_height != renderer->render_height) {
+		renderer->applied_aa = antialiasing;
+		renderer->render_width = render_width;
+		renderer->render_height = render_height;
+		renderer->needs_redraw = true;
+	}
 	if (renderer->needs_redraw || !renderer->has_drawing) {
 		renderer->needs_redraw = false;
 		renderer->has_drawing = false;
@@ -1022,7 +1086,7 @@ void native_renderer_render(struct native_renderer *renderer)
 			renderer->draw_failed_logged = true;
 			return;
 		}
-		renderer->has_drawing = draw_skeleton(renderer, renderer->frame_width, renderer->frame_height);
+		renderer->has_drawing = draw_skeleton(renderer, renderer->render_width, renderer->render_height);
 	}
 	if (renderer->has_drawing)
 		composite(renderer, renderer->frame_width, renderer->frame_height);
