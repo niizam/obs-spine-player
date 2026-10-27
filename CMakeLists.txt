@@ -32,6 +32,8 @@ target_sources(
     src/spine-source.h
     src/native/atlas-image.c
     src/native/atlas-image.h
+    src/native/skeleton-version.c
+    src/native/skeleton-version.h
 )
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
 if(WIN32)
@@ -90,6 +92,12 @@ if(UNIX)
   target_link_libraries(atlas-image-tests PRIVATE m)
 endif()
 add_test(NAME atlas-image-tests COMMAND atlas-image-tests)
+
+add_executable(skeleton-version-tests tests/skeleton-version-test.c src/native/skeleton-version.c src/skeleton-binary.c)
+target_include_directories(skeleton-version-tests PRIVATE src src/native tests)
+target_compile_features(skeleton-version-tests PRIVATE c_std_11)
+target_compile_definitions(skeleton-version-tests PRIVATE TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+add_test(NAME skeleton-version-tests COMMAND skeleton-version-tests)
 
 add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
 target_include_directories(level-gate-tests PRIVATE src)
