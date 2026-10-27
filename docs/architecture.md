@@ -2,116 +2,164 @@
 
 ## Design summary
 
-The plugin is a small native OBS source that owns a private Browser Source. Native code handles OBS integration, audio/cursor sampling, settings, and hotkeys. The browser page handles Spine asset loading, animation tracks, and additive rig controls.
+The plugin is one native OBS source. It handles OBS integration, audio/cursor sampling, settings and hotkeys. It draws the character itself through libobs graphics, using the official spine-c runtimes.
 
 ```text
 OBS audio source ──> RMS peak ──> level gate ──┐
-                                               ├─> browser event bridge ─> SpineStateController ─> Spine tracks
+                                               ├─> native_renderer_* ─> state machine ─> Spine tracks
 OBS hotkeys ───────> emotion/action command ───┘
-Desktop cursor ────> normalized x/y ─────────────> SpineEyeTracker ────────> eye bones
+Desktop cursor ────> normalized x/y ─────────────> eye tracker ─────────> eye bones
 ```
 
-This boundary keeps OBS-specific lifetime and audio threading out of the player, while keeping Spine runtime objects out of native code. The optional native renderer (below) replaces the browser for Spine 3.7, 4.0 and 4.1 skeletons.
+`spine-source.c` only produces normalized commands. Everything that touches a skeleton runs inside the renderer, on OBS's graphics thread.
+
+Versions before stage 5 of the native rewrite drew through a hidden OBS Browser Source and a spine-ts player page. That path was removed once the native renderer matched it for every supported asset and control. Design: [stage 5 spec](superpowers/specs/2026-10-27-remove-browser-renderer-design.md).
 
 ## Components
 
-- `src/spine-source.c` registers the source, owns the private `browser_source`, exposes properties/hotkeys, subscribes to a selected audio source, and emits normalized control events.
-- `src/level-gate.c` converts an amplitude stream into a stable open/closed signal. It contains no OBS or speech-specific behavior.
-- `src/cursor-input.c` is a platform adapter that samples and normalizes the global desktop cursor. It uses the Windows virtual desktop, macOS display coordinates, Hyprland's native command socket, or X11 without coupling platform APIs to the Spine renderer.
-- `src/browser-bridge.c` is the only native dependency on the OBS Browser `javascript_event` procedure.
-- `src/animation-catalog.c` discovers JSON animation keys, reads adjacent `.animations.txt` catalogs, and otherwise asks `src/skeleton-binary.c` for the names in a binary export. OBS properties use one shared catalog to populate editable dropdowns, preserving unknown values from existing scenes.
-- `src/skeleton-binary.c` is a bounds-checked reader for the Spine 3.7, 4.0, and 4.1 binary layouts. It skips every section with its exact size (following spine-libgdx 3.7.94 and spine-ts 4.0/4.1) and only accepts a file it consumed to the last byte, so a layout mismatch produces no names rather than wrong ones. It has no OBS dependency, which keeps it unit-testable.
-- `tools/generate-animation-catalog.js` uses the matching bundled Spine runtime to parse a skeleton and write a catalog file. It doubles as the reference the native reader is checked against.
-- `data/player/version-detector.js` reads the version from Spine binary/JSON headers (Spine 3 binaries start with a hash string, Spine 4 binaries with eight hash bytes) and selects the bundled 3.7, 4.0, or 4.1 family.
-- `data/player/spine37-binary.js` ports the spine-libgdx 3.7.94 `SkeletonBinary` reader to the spine-ts 3.7 object model, because spine-ts 3.7 only ships `SkeletonJson`.
-- `data/player/spine37-player.js` is a small player over the official 3.7 `spine-webgl` runtime. The upstream 3.7 web player is JSON-only, drives track 0 from its timeline UI, and has no frame hooks, so the adapter exposes the subset of the 4.x `SpinePlayer` surface the renderer uses (asset URLs, default animation, `frame`/`update`/`success`/`error` callbacks, `skeleton`, `animationState`, `dispose`). It frames the sampled bounds of the default animation with 10% padding like the 4.x player.
-- `data/player/mouth-overlay.js` decides what yap mode plays: a dedicated mouth animation unchanged, or a mouth-only animation assembled from an existing clip's timelines (see below). It is version-agnostic and DOM-free.
-- `data/player/state-controller.js` owns animation semantics independently of DOM/loading code.
-- `data/player/eye-tracker.js` resolves configurable eye slots to unique bones, smooths normalized cursor input, and applies additive screen-space offsets after animation evaluation.
-- `data/player/player-options.js` builds runtime options and supplies the default animation during construction. Spine Player uses that animation to calculate its initial viewport; applying or resetting it inside the success callback can produce a loaded but invisible character.
-- `data/player/player.js` loads assets, creates/disposes the matching Spine player, and adapts browser events to the state controller.
-- `data/player/asset-url.js` maps native file paths to OBS Browser's `http://absolute/` local-file scheme. Do not use `file://` URLs here: the player page has an `http://absolute` origin, so Chromium rejects direct `file://` fetches as cross-origin requests.
+- **`src/spine-source.c`** registers the source and owns one `native_renderer` for the source's lifetime.
+  - It exposes properties and hotkeys, subscribes to a selected audio source, and sends normalized controls to the renderer.
+  - It erases the `renderer` setting that earlier versions saved.
+- **`src/level-gate.c`** converts an amplitude stream into a stable open/closed signal. It contains no OBS or speech-specific behavior.
+- **`src/cursor-input.c`** is a platform adapter that samples and normalizes the global desktop cursor.
+  - It uses the Windows virtual desktop, macOS display coordinates, Hyprland's native command socket, or X11.
+  - Platform APIs stay out of the renderer.
+- **`src/animation-catalog.c`** discovers the names that populate the editable animation dropdowns. It preserves unknown values from existing scenes.
+  - It reads JSON animation keys, or an adjacent `.animations.txt` catalog when present.
+  - Otherwise it asks `src/skeleton-binary.c` for the names in a binary export.
+- **`src/skeleton-binary.c`** is a bounds-checked reader for the Spine 3.7, 4.0 and 4.1 binary layouts.
+  - It skips every section by its exact size, following spine-libgdx 3.7.94 and spine-ts 4.0/4.1.
+  - It only accepts a file it consumed to the last byte, so a layout mismatch produces no names rather than wrong ones.
+- **`tools/`** holds developer tools. They are not installed.
+  - `generate-animation-catalog.js` writes a catalog file.
+  - `generate-native-reference.js` writes the parity references in `tests/fixtures/*/reference.h`.
+  - Both run the official spine-ts runtimes kept in `tools/spine-ts/runtime/`. For 3.7 binaries, `tools/spine-ts/spine37-binary.js` is a port of the spine-libgdx 3.7.94 reader, because spine-ts 3.7 only reads JSON.
+  - `tools/spine-ts/version-detector.js` is the JS counterpart of `src/native/skeleton-version.c`.
 
-## Native renderer
+## Renderer
 
-With **Renderer: Native**, `spine-source.c` creates no browser source. Instead it owns a `native_renderer` (`src/native/native-renderer.c`). Design: [stage 1 spec](superpowers/specs/2026-10-27-native-renderer-41-design.md).
+`src/native/native-renderer.c` draws one skeleton. Design: [stage 1 spec](superpowers/specs/2026-10-27-native-renderer-41-design.md).
 
 - **Version backends.** `src/native/spine-backend.h` is a version-neutral interface: load, animate, bounds, draw lists, skeleton description, overlays, bone access, and blend factors.
   - `src/native/backend.c` implements it and is compiled three times (`SPINE_BACKEND_VERSION` 37, 40, 41) against the vendored spine-c 3.7, 4.0 and 4.1 (`third_party/spine-c-<ver>`). Compatibility macros cover the API differences.
   - `src/native/backends.c` maps a detected Spine family to its backend. The loader stores that backend with each result, so an asset is always freed by its own runtime.
-  - Each Spine version family is compiled with a generated forced-include header (`src/native/spine37-prefix.h`, `spine40-prefix.h`, `spine41-prefix.h`, from `tools/generate-spine-prefix.js`). It renames every external symbol (`sp37_*`, `sp40_*`, `sp41_*`), so all three runtimes share the one plugin module.
-  - Blend factors come from each backend, because spine-ts 3.7 uses `gl.blendFunc` while 4.x uses separate alpha factors.
-  - spine-c 3.7 keeps the C library allocator, because its `Skeleton.c` calls `realloc` directly.
-  - The `spine41-prefix-check` test fails if a symbol escapes the prefix.
+  - Each runtime is compiled with a generated forced-include header (`src/native/spine37-prefix.h`, `spine40-prefix.h`, `spine41-prefix.h`, from `tools/generate-spine-prefix.js`). The header renames every external symbol (`sp37_*`, `sp40_*`, `sp41_*`), so all three runtimes share one plugin module. The `spine<ver>-prefix-check` tests fail if a symbol escapes its prefix.
+  - Each backend refuses JSON that declares another version family, because another version's layout crashes spine-c's reader.
+  - Other Spine versions log `Spine <version> is not supported; …` and draw nothing.
 - **Threads.**
   - Loading happens on a per-source background thread, and only the latest request is kept.
   - GPU resources, the skeleton instance and drawing live on the OBS graphics thread.
-  - Switching between Browser and Native happens on the UI thread under `renderer_mutex`.
-  - A load that needs another Spine version queues a fallback to Browser on the UI thread.
-- **Drawing.** It mirrors the spine-ts 4.1 renderer: premultiplied two-colour tint (`data/effects/spine.effect`), spine-ts blend factors, and clipping.
-  - The skeleton is drawn into an offscreen texture with gamma-space blending, as in WebGL.
-  - That texture is composited exactly like obs-browser: sRGB decode, `ONE, INVSRCALPHA`.
-  - Framing copies the web player: 100 animation samples, 10 % padding, contain-fit.
+  - Control input (`set_controls`, `set_yapping`, `set_cursor`, `trigger`, `reset`) may arrive from any thread, including the hotkey thread. It is applied on the next tick.
+- **Drawing.** It mirrors the spine-ts renderer: a premultiplied two-colour tint (`data/effects/spine.effect`), each version's spine-ts blend factors, and clipping.
+  - Direct3D 11 rejects colour factors in the alpha channel, so `spine_alpha_factor` maps them to their alpha equivalents, which is what WebGL does.
+  - The skeleton is drawn into an offscreen texture with gamma-space blending, as in WebGL. That texture is composited with sRGB decode and `ONE, INVSRCALPHA`.
+  - Framing copies the web player: 100 animation samples, 10 % padding, contain-fit. 3.7 uses the old 3.7 player's sampling.
 - **Anti-aliasing.** libobs has no MSAA (render targets are single-sample) and never builds mipmaps.
-  - Atlas pages are resized to power-of-two sizes and given a CPU-built premultiplied mip chain (`atlas-image.c`), then sampled with 16× anisotropic filtering.
-  - CPU copies are freed after upload.
-- **Controls.** The browser controllers have version-neutral C ports, and their JS tests are ported as C tests:
-  - `src/native/state-machine.c` ports `state-controller.js`;
-  - `src/native/mouth-plan.c` ports `mouth-overlay.js`;
-  - `src/native/eye-tracker.c` ports `eye-tracker.js`.
+  - Atlas pages are resized to power-of-two sizes and given a CPU-built premultiplied mip chain (`atlas-image.c`). They are sampled with 16× anisotropic filtering, and the CPU copies are freed after upload.
+  - FXAA (`data/effects/spine-fxaa.effect`) and 1.5×/2× supersampling with an area downscale are optional.
+- **Controls.** Three version-neutral modules reach the skeleton only through callbacks and the backend's read-only `spine_skeleton_desc`:
+  - `src/native/state-machine.c` handles emotions, one-shot actions and reset on track 0, and the mouth on track 1;
+  - `src/native/mouth-plan.c` decides what yap mode plays;
+  - `src/native/eye-tracker.c` runs cursor eye tracking.
 
-  They reach the skeleton only through callbacks and the backend's read-only `spine_skeleton_desc`.
-  - `spine-source.c` sends yap, cursor, hotkey and configuration input to `native_renderer_set_*` / `trigger` / `reset` instead of browser events.
-  - The renderer applies that input on the graphics thread. Each frame runs: eye restore → animation update → eye offsets.
-  - Mouth overlays share the source clip's timelines and are freed only with their instance, never through `spAnimation_dispose`.
-- **OBS allocator rules.** spine-c's allocations go through `bmalloc`. Zero-byte requests are rounded up because OBS treats them as fatal, and the runtime's shared statics are freed in `obs_module_unload`.
+  The renderer applies control input on the graphics thread. Each frame runs: eye restore → animation update → eye offsets.
+
+  Mouth overlays share the source clip's timelines. They are freed only with their instance, never through `spAnimation_dispose`.
+- **OBS allocator rules.**
+  - spine-c 4.0 and 4.1 allocate through `bmalloc`. Zero-byte requests are rounded up, because OBS treats them as fatal.
+  - spine-c 3.7 keeps the C library allocator, because its `Skeleton.c` calls `realloc` directly. `spine_backends_set_host_allocator` encodes that rule.
+  - The runtimes' shared statics are freed in `obs_module_unload`.
 
 ## Animation model
 
-Track 0 contains the base character state. It starts with `idle`. A looping emotion replaces track 0 until another state or reset is requested. A one-shot action is placed on track 0 and queues the default animation behind it.
+Track 0 contains the base character state, starting with `idle`.
 
-Track 1 is reserved for mouth movement. Yap mode loops `talk_start` there and clears only track 1 after the release hold. This is the important behavior taken from the Nikke reference: mouth motion overlays the current body animation instead of replacing `idle`.
+- A looping emotion replaces track 0 until another state or reset is requested.
+- A one-shot action is placed on track 0, and queues the default animation behind it.
 
-Some rigs have no dedicated mouth animation. CounterSide illustrations, for example, key a `mouth_talk` attachment and the mouth bone's scale inside the full-body `TOUCH` clip. For those, `SpineMouthOverlay` builds a new `spine.Animation` from the source clip's timelines for the mouth slots (every slot on the talking-mouth slot's bone, or the configured slots) and for bones used only by those slots. The timeline objects are shared, not copied, and the track entry's `animationStart`/`animationEnd` limit the loop to the talking stretch, so no version-specific keyframe manipulation is needed. When the track empties, Spine restores un-keyed mouth attachments to the setup pose or to the emotion on track 0.
+Track 1 is reserved for mouth movement. Yap mode loops `talk_start` there, and clears only track 1 after the release hold. This is the important behavior taken from the Nikke reference: mouth motion overlays the current body animation instead of replacing `idle`.
 
-Eye tracking does not use an animation track. The Spine Player `frame` callback first removes the previous additive offsets, then Spine evaluates active animations normally. The `update` callback converts the requested world-space displacement through each bone parent's inverse transform, applies local offsets, and refreshes world transforms before drawing. This prevents drift, preserves animated eye-bone motion, and keeps mirrored left/right rigs moving in the same screen direction.
+Some rigs have no dedicated mouth animation. CounterSide illustrations, for example, key a `mouth_talk` attachment and the mouth bone's scale inside the full-body `TOUCH` clip.
 
-Configured layer names are Spine slots rather than assumed bone names. Resolving slots at runtime lets multiple pupil, iris, and highlight attachments move as one controlling bone and keeps the settings portable to another rig. Mekami_Shifty's default left slots resolve to `bone151`; its right slots resolve to `bone152`.
+- For those, `mouth-plan.c` picks the source clip and the mouth slots: every slot on the talking-mouth slot's bone, or the configured slots, plus the bones used only by those slots.
+- The backend builds an overlay animation from that clip's timelines for those slots and bones. The timelines are shared, not copied.
+- The track entry's animation start and end limit the loop to the talking stretch.
+- When the track empties, Spine restores un-keyed mouth attachments to the setup pose, or to the emotion on track 0.
 
-The emotion state machine and emotion hotkey dispatch are separate settings. Turning the state machine off resets track 0 and rejects state transitions. Turning hotkeys off keeps the state machine available to future input adapters while ignoring OBS hotkey presses.
+Eye tracking does not use an animation track.
+
+- Before each update, the eye tracker removes its previous offsets. Spine then evaluates the active animations normally.
+- Afterwards, the tracker converts the requested world-space displacement through each bone parent's inverse transform, applies local offsets, and refreshes world transforms before drawing.
+- This prevents drift, preserves animated eye-bone motion, and keeps mirrored left/right rigs moving in the same screen direction.
+
+Configured eye layers are named by Spine slot, not by bone. Slots are resolved at runtime, so multiple pupil, iris and highlight attachments move as one controlling bone, and the settings carry over to another rig. Mekami_Shifty's default left slots resolve to `bone151`; its right slots resolve to `bone152`.
+
+The emotion state machine and emotion hotkey dispatch are separate settings.
+
+- Turning the state machine off resets track 0 and rejects state transitions.
+- Turning hotkeys off ignores OBS hotkey presses, but keeps the state machine available to future input adapters.
 
 ## Audio threading
 
-OBS invokes the audio capture callback on its audio path. That callback calculates one-channel RMS and performs only an atomic maximum update. It never calls the browser, allocates, changes animation state, or performs recognition.
+OBS invokes the audio capture callback on its audio path.
 
-The video tick consumes the pending peak, advances the attack/release gate, and emits a browser event only when the boolean yap state changes. This avoids flooding CEF and gives a future audio feature a clear real-time-safe boundary.
+- The callback calculates one-channel RMS and performs only an atomic maximum update.
+- It never touches the renderer, allocates, changes animation state, or performs recognition.
 
-Desktop cursor input is sampled from the video tick at 30 Hz and sent as normalized `[-1, 1]` coordinates. Browser-side exponential smoothing bridges those samples at render rate. Hyprland sessions use the compositor command socket and monitor layout directly because XWayland exposes a frozen or restricted pointer. Other native Wayland compositors require their own explicit adapter; X11 remains the generic Linux fallback, and a failed backend is logged once rather than retried noisily.
+The video tick consumes the pending peak and advances the attack/release gate. It passes the yap state to the renderer only when the boolean changes, which gives a future audio feature a clear real-time-safe boundary.
+
+Desktop cursor input is sampled from the video tick at 30 Hz and sent as normalized `[-1, 1]` coordinates. The renderer's eye tracker smooths them exponentially at render rate.
+
+On Linux:
+
+- Hyprland sessions use the compositor command socket and monitor layout directly, because XWayland exposes a frozen or restricted pointer.
+- Other native Wayland compositors need their own explicit adapter.
+- X11 remains the generic fallback.
+- A failed backend is logged once rather than retried noisily.
 
 ## Character assets
 
-Character skeletons, atlases, textures, and animation catalogs are intentionally excluded from version control. The plugin has configurable eye-slot presets but does not bundle character data. A developer may keep assets in the ignored local `characters/` directory for testing; CMake installs that directory only when it exists.
+Character skeletons, atlases, textures and animation catalogs are intentionally excluded from version control. The plugin has configurable eye-slot presets but bundles no character data. A developer may keep assets in the ignored local `characters/` directory for testing; CMake installs that directory only when it exists.
 
 ## Reference decisions
 
-- `references/pub_web_spine-web-player-custom` established the official 4.0.28/4.1.20 player runtimes, transparent WebGL configuration, raw/local asset loading pattern, and version-specific runtime split.
+- `references/pub_web_spine-web-player-custom` established the official 4.0.28/4.1.20 player runtimes. Their framing and blending are what the native renderer is checked against.
 - `references/nikke-db-vue` established the `talk_start` check and the track-1 overlay/clear behavior used by yap mode.
 - `references/obs-plugintemplate` established the module registration, localization, CMake, and install-layout conventions.
 
 ## Adding future inputs
 
-New discrete inputs should produce one of three normalized commands rather than directly manipulating Spine:
+New discrete inputs should produce one of three normalized commands, rather than manipulating Spine directly:
 
-- yap active/inactive;
-- trigger animation with loop/one-shot intent;
-- reset to the default animation.
+- yap active/inactive (`native_renderer_set_yapping`);
+- trigger animation with loop/one-shot intent (`native_renderer_trigger`);
+- reset to the default animation (`native_renderer_reset`).
 
-Continuous pose inputs should follow the cursor adapter pattern: sample outside the Spine runtime, send normalized values through the browser bridge, then apply them in a small renderer-side controller after animation evaluation. Face gaze or remote pointer input can therefore replace `cursor-input.c` without changing eye-slot resolution or offset math.
+Continuous pose inputs should follow the cursor pattern: sample outside the Spine runtime, pass normalized values to the renderer, then apply them in a small controller after animation evaluation. Face gaze or remote pointer input can therefore replace `cursor-input.c` without changing eye-slot resolution or offset math.
 
-For ASR/STT, add a separate adapter that consumes audio or transcript results off the OBS audio callback, then emits emotion/action commands through `browser_bridge_send`. Do not put recognition in `SpineStateController`, and do not make track selection depend on a recognizer. A speech-emotion model can therefore be added or removed without changing asset loading, the state machine, hotkeys, or microphone yap mode.
+For ASR/STT:
 
-For non-speech integrations such as MIDI, WebSocket, stream-deck actions, or automation, follow the same command boundary. If external inputs need more than the current three commands, version the browser-event payload rather than exposing Spine runtime objects to native adapters.
+- Add a separate adapter that consumes audio or transcript results off the OBS audio callback, then sends emotion/action commands through those functions.
+- Do not put recognition in `state-machine.c`, and do not make track selection depend on a recognizer.
+- A speech-emotion model can then be added or removed without changing asset loading, the state machine, hotkeys, or microphone yap mode.
+
+Non-speech integrations such as MIDI, WebSocket, stream-deck actions or automation follow the same command boundary. If they need more than the three commands, extend the `native_renderer` control API, rather than exposing spine-c objects to input adapters.
 
 ## Tests
 
-`tests/asset-url.test.js` verifies OBS-local URLs on Unix and Windows. `tests/player-options.test.js` verifies initial animation, asset loader options, and additive-control render hooks. `tests/state-controller.test.js` verifies idle, persistent states, one-shot return, optional states, and the independent mouth track. `tests/eye-tracker.test.js` verifies slot resolution, mirrored parent transforms, missing slots, and non-accumulating offsets. `tests/version-detector.test.js` verifies runtime selection, including the Spine 3 header. `tests/spine37-binary.test.js` reads a synthetic 3.7 export through the bundled runtime. `tests/mouth-overlay.test.js` verifies mouth detection, bone exclusivity, talk windows, and the dedicated-animation path. `tests/skeleton-binary-test.c` builds 3.7, 4.0, and 4.1 binaries in memory and checks names, truncation, trailing data, and unsupported versions; run it with file arguments to print the names of real exports. `tests/animation-catalog-test.c` verifies binary sidecars, native binary discovery from `tests/fixtures/spine37-synthetic.skel` (written by `skeleton-binary-tests --write`), and JSON discovery. `tests/level-gate-test.c` verifies attack/release behavior.
+`ctest` runs every suite.
+
+**Native renderer:**
+
+- `backend-{37,40,41}-tests` check each runtime against its spine-ts reference: bounds, draw lists, slots, overlays, version checks, and memory.
+- `backends-tests` links all three runtimes into one executable and checks the allocator policy.
+- `spine{37,40,41}-prefix-check` verifies every runtime symbol is renamed.
+- `atlas-image`, `framing`, `blend`, `antialiasing`, `skeleton-version`, `mouth-plan`, `state-machine` and `eye-tracker` tests cover the version-neutral modules.
+
+**Source and catalogs:**
+
+- `skeleton-binary-tests` builds 3.7, 4.0 and 4.1 binaries in memory, and checks names, truncation, trailing data and unsupported versions. Run it with file arguments to print the names of real exports.
+- `animation-catalog-tests` checks binary sidecars, native binary discovery from `tests/fixtures/spine37-synthetic.skel` (written by `skeleton-binary-tests --write`), and JSON discovery.
+- `level-gate-tests` checks attack/release behavior.
+
+**Tools:** `tools-js-tests` runs the Node tests for the developer tools: the version detector, the 3.7 binary reader, and the symbol-prefix parser.

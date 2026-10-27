@@ -1,5 +1,7 @@
 # Renderer performance
 
+The browser renderer measured below was removed in stage 5 of the native rewrite. The plugin now always draws natively. The Browser rows are kept as history: they show what an upgrade saves.
+
 ## 2026-10-27: Browser vs Native (stage 1)
 
 **Machine:** AMD Ryzen 7 5700X (16 logical cores), NVIDIA GPU, Windows 11 24H2.
