@@ -69,10 +69,6 @@ struct spine_source {
 	char *seen_core;
 	char *seen_atlas;
 	char *seen_runtime;
-	bool native_notice_yap;
-	bool native_notice_eye;
-	bool native_notice_states;
-	bool native_notice_hotkeys;
 	obs_source_t *audio_input;
 	char *audio_input_name;
 	uint32_t width;
@@ -232,8 +228,22 @@ static void update_browser_dimensions(struct spine_source *context)
 	obs_source_release(browser);
 }
 
+static void copy_setting(char *out, size_t size, obs_data_t *settings, const char *name)
+{
+	const char *value = obs_data_get_string(settings, name);
+	snprintf(out, size, "%s", value ? value : "");
+}
+
 static void send_yap_state(struct spine_source *context)
 {
+	pthread_mutex_lock(&context->renderer_mutex);
+	if (context->native) {
+		native_renderer_set_yapping(context->native, context->yap_enabled && context->gate.active);
+		pthread_mutex_unlock(&context->renderer_mutex);
+		return;
+	}
+	pthread_mutex_unlock(&context->renderer_mutex);
+
 	obs_data_t *payload = obs_data_create();
 	obs_data_set_bool(payload, "active", context->yap_enabled && context->gate.active);
 	send_browser_event(context, "obsSpineYap", payload);
@@ -242,6 +252,14 @@ static void send_yap_state(struct spine_source *context)
 
 static void send_cursor_position(struct spine_source *context, const struct cursor_position *position)
 {
+	pthread_mutex_lock(&context->renderer_mutex);
+	if (context->native) {
+		native_renderer_set_cursor(context->native, (float)position->x, (float)position->y);
+		pthread_mutex_unlock(&context->renderer_mutex);
+		return;
+	}
+	pthread_mutex_unlock(&context->renderer_mutex);
+
 	obs_data_t *payload = obs_data_create();
 	obs_data_set_double(payload, "x", position->x);
 	obs_data_set_double(payload, "y", position->y);
@@ -249,8 +267,37 @@ static void send_cursor_position(struct spine_source *context, const struct curs
 	obs_data_release(payload);
 }
 
+/* Native renderer: the same controls the browser page receives. Returns false when native is not active. */
+static bool send_native_configuration(struct spine_source *context)
+{
+	struct native_controls controls = {0};
+	obs_data_t *settings = obs_source_get_settings(context->source);
+	controls.state_enabled = context->state_enabled;
+	controls.yap_enabled = context->yap_enabled;
+	copy_setting(controls.yap_animation, sizeof(controls.yap_animation), settings, SETTING_YAP_ANIMATION);
+	copy_setting(controls.mouth_slots, sizeof(controls.mouth_slots), settings, SETTING_YAP_MOUTH_SLOTS);
+	controls.eye_enabled = context->eye_tracking_enabled;
+	copy_setting(controls.eye_left, sizeof(controls.eye_left), settings, SETTING_EYE_LEFT_SLOTS);
+	copy_setting(controls.eye_right, sizeof(controls.eye_right), settings, SETTING_EYE_RIGHT_SLOTS);
+	controls.eye_max_x = obs_data_get_double(settings, SETTING_EYE_MAX_X);
+	controls.eye_max_y = obs_data_get_double(settings, SETTING_EYE_MAX_Y);
+	controls.eye_smoothing_ms = obs_data_get_double(settings, SETTING_EYE_SMOOTHING);
+	obs_data_release(settings);
+
+	pthread_mutex_lock(&context->renderer_mutex);
+	const bool native = context->native != NULL;
+	if (native) {
+		native_renderer_set_controls(context->native, &controls);
+		native_renderer_set_yapping(context->native, context->yap_enabled && context->gate.active);
+	}
+	pthread_mutex_unlock(&context->renderer_mutex);
+	return native;
+}
+
 static void send_configuration(struct spine_source *context)
 {
+	if (send_native_configuration(context))
+		return;
 	obs_source_t *browser = get_browser_ref(context);
 	if (!browser)
 		return;
@@ -308,6 +355,14 @@ static void send_emotion(struct spine_source *context, size_t index)
 	emotion_loop_setting_name(loop_key, sizeof(loop_key), index);
 	obs_data_t *settings = obs_source_get_settings(context->source);
 	const char *animation = obs_data_get_string(settings, animation_key);
+	pthread_mutex_lock(&context->renderer_mutex);
+	if (context->native) {
+		native_renderer_trigger(context->native, animation, obs_data_get_bool(settings, loop_key));
+		pthread_mutex_unlock(&context->renderer_mutex);
+		obs_data_release(settings);
+		return;
+	}
+	pthread_mutex_unlock(&context->renderer_mutex);
 	if (animation && *animation) {
 		obs_data_t *payload = obs_data_create();
 		obs_data_set_string(payload, "animation", animation);
@@ -331,9 +386,16 @@ static void reset_hotkey_pressed(void *data, obs_hotkey_id id, obs_hotkey_t *hot
 {
 	struct spine_source *context = data;
 	if (pressed && context->state_enabled && context->hotkeys_enabled) {
-		obs_data_t *payload = obs_data_create();
-		send_browser_event(context, "obsSpineReset", payload);
-		obs_data_release(payload);
+		pthread_mutex_lock(&context->renderer_mutex);
+		struct native_renderer *native = context->native;
+		if (native)
+			native_renderer_reset(native);
+		pthread_mutex_unlock(&context->renderer_mutex);
+		if (!native) {
+			obs_data_t *payload = obs_data_create();
+			send_browser_event(context, "obsSpineReset", payload);
+			obs_data_release(payload);
+		}
 	}
 	UNUSED_PARAMETER(id);
 	UNUSED_PARAMETER(hotkey);
@@ -484,14 +546,6 @@ static bool apply_renderer(struct spine_source *context)
 	return false;
 }
 
-static void log_native_notice(struct spine_source *context, bool enabled, bool *logged, const char *feature)
-{
-	if (enabled && !*logged) {
-		spine_log(context, LOG_INFO, "%s is not supported by the native renderer yet", feature);
-		*logged = true;
-	}
-}
-
 /* UI thread, queued from the graphics thread when a native load needs the browser. */
 static void native_fallback_task(void *param)
 {
@@ -622,11 +676,6 @@ static void spine_source_update(void *data, obs_data_t *settings)
 		if (selection_changed || native_created)
 			native_renderer_load(context->native, core_path, atlas_path, spine_family_from_setting(runtime));
 		native_renderer_configure(context->native, default_animation, context->width, context->height);
-		log_native_notice(context, context->yap_enabled, &context->native_notice_yap, "yap mode");
-		log_native_notice(context, context->eye_tracking_enabled, &context->native_notice_eye, "eye tracking");
-		log_native_notice(context, context->state_enabled, &context->native_notice_states, "the emotion state machine");
-		log_native_notice(context, context->state_enabled && context->hotkeys_enabled,
-				  &context->native_notice_hotkeys, "emotion hotkeys");
 	}
 	connect_audio_source(context, obs_data_get_string(settings, SETTING_YAP_AUDIO_SOURCE));
 	if (!context->yap_enabled) {
@@ -682,7 +731,7 @@ static void spine_source_tick(void *data, float seconds)
 			      context->release_ms))
 		send_yap_state(context);
 
-	if (context->eye_tracking_enabled && !native_active) {
+	if (context->eye_tracking_enabled) {
 		context->cursor_timer += seconds;
 		if (context->cursor_timer >= CURSOR_SAMPLE_INTERVAL) {
 			context->cursor_timer = fmodf(context->cursor_timer, CURSOR_SAMPLE_INTERVAL);
