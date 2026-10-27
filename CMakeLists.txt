@@ -10,6 +10,8 @@ enable_testing()
 find_program(NODE_EXECUTABLE node)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/spine-runtime.cmake")
+spine_add_raw_runtime(3.7)
+spine_add_raw_runtime(4.0)
 spine_add_raw_runtime(4.1)
 spine_add_backend(VERSION 4.1 PREFIX sp41_ SOURCES src/native/backend-41.c)
 
