@@ -56,7 +56,7 @@ GitHub Actions builds Linux x86_64 and Windows x64 packages on pushes to `main`,
   - In a first measurement it used roughly a third of the Browser renderer's CPU and GPU ([numbers](docs/performance.md)).
   - Atlas textures are mipmapped and sampled with trilinear/anisotropic filtering, so edges stay smooth when a large atlas is drawn small.
 
-Native mode currently plays the default animation only. Yap mode, eye tracking, and emotions/hotkeys still require Browser. Skeletons that are not Spine 4.1, or a forced runtime other than 4.1, switch back to Browser automatically, and the OBS log says why.
+Native mode supports every control the Browser renderer has: yap mode (including the derived mouth-only overlay), cursor eye tracking, and the emotion state machine with its hotkeys. Skeletons that are not Spine 4.1, or a forced runtime other than 4.1, switch back to Browser automatically, and the OBS log says why.
 
 ## Cursor eye tracking
 

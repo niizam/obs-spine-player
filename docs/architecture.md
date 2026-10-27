@@ -51,6 +51,15 @@ With **Renderer: Native**, `spine-source.c` creates no browser source. Instead i
 - **Anti-aliasing.** libobs has no MSAA (render targets are single-sample) and never builds mipmaps.
   - Atlas pages are resized to power-of-two sizes and given a CPU-built premultiplied mip chain (`atlas-image.c`), then sampled with 16× anisotropic filtering.
   - CPU copies are freed after upload.
+- **Controls.** The browser controllers have version-neutral C ports, and their JS tests are ported as C tests:
+  - `src/native/state-machine.c` ports `state-controller.js`;
+  - `src/native/mouth-plan.c` ports `mouth-overlay.js`;
+  - `src/native/eye-tracker.c` ports `eye-tracker.js`.
+
+  They reach the skeleton only through callbacks and the backend's read-only `spine_skeleton_desc`.
+  - `spine-source.c` sends yap, cursor, hotkey and configuration input to `native_renderer_set_*` / `trigger` / `reset` instead of browser events.
+  - The renderer applies that input on the graphics thread. Each frame runs: eye restore → animation update → eye offsets.
+  - Mouth overlays share the source clip's timelines and are freed only with their instance, never through `spAnimation_dispose`.
 - **OBS allocator rules.** spine-c's allocations go through `bmalloc`. Zero-byte requests are rounded up because OBS treats them as fatal, and the runtime's shared statics are freed in `obs_module_unload`.
 
 ## Animation model
