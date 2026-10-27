@@ -370,7 +370,13 @@ static struct load_result *load_asset(struct native_renderer *renderer, const ch
 	enum spine_family family = skeleton_version_detect((const uint8_t *)bytes, size, is_json_path(skeleton),
 							    result->version, sizeof(result->version));
 	free(bytes);
-	if (forced != SPINE_FAMILY_UNKNOWN)
+	/* The runtime override exists because the browser cannot always probe local files; the native
+	 * loader reads the file itself, so a detected version wins over a mismatched override. */
+	if (forced != SPINE_FAMILY_UNKNOWN && family != SPINE_FAMILY_UNKNOWN && forced != family)
+		native_log(renderer, LOG_WARNING,
+			   "the Spine runtime setting does not match the skeleton (Spine %s); using the detected version",
+			   result->version);
+	else if (forced != SPINE_FAMILY_UNKNOWN)
 		family = forced;
 	if (!result->version[0])
 		snprintf(result->version, sizeof(result->version), "unknown");

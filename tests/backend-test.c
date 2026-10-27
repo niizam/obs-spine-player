@@ -742,6 +742,29 @@ static void test_animation_queue_and_overlay(void)
 	backend->free_asset(asset); /* shared timelines must be freed exactly once */
 }
 
+/* A user's runtime override can hand a backend another version's export; that must fail cleanly. */
+static void test_other_versions_rejected(void)
+{
+	static const char *const versions[] = {"spine37", "spine40", "spine41"};
+	static const char *const files[] = {"spineboy-pro.json", "spineboy-pro.skel"};
+	for (size_t v = 0; v < 3; v++) {
+		if (strcmp(versions[v], FIXTURE_VERSION_DIR) == 0)
+			continue;
+		for (size_t f = 0; f < 2; f++) {
+			char path[1024];
+			snprintf(path, sizeof(path), "%s/%s/%s", TEST_FIXTURE_DIR, versions[v], files[f]);
+			char error[512] = "";
+			struct spine_asset *asset = load(path, FIXTURE("spineboy-pma.atlas"), error, sizeof(error));
+			CHECK(asset == NULL);
+			CHECK(error[0] != '\0');
+			if (asset) {
+				fprintf(stderr, "%s backend accepted %s\n", BACKEND_NAME, path);
+				backend->free_asset(asset);
+			}
+		}
+	}
+}
+
 /* spine-c 3.7 calls the C library's realloc directly (Skeleton.c update cache), so it must keep
  * the C library allocator: memory from OBS's bmalloc (_aligned_malloc on Windows) would corrupt
  * the heap there. 4.x routes every allocation through _spMalloc/_spRealloc/_spFree. */
@@ -904,5 +927,6 @@ int main(void)
 	test_blend_factors();
 	test_repeated_overlays_do_not_grow();
 	test_allocator_policy();
+	test_other_versions_rejected();
 	return TEST_RESULT();
 }

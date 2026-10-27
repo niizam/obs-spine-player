@@ -125,7 +125,7 @@ add_test(NAME skeleton-version-tests COMMAND skeleton-version-tests)
 
 # One backend test executable per Spine version, sharing tests/backend-test.c.
 function(spine_add_backend_test tag version)
-  add_executable(backend-${tag}-tests tests/backend-test.c src/native/atlas-image.c src/native/draw-list.c src/skeleton-binary.c)
+  add_executable(backend-${tag}-tests tests/backend-test.c src/native/atlas-image.c src/native/draw-list.c src/native/skeleton-version.c src/skeleton-binary.c)
   target_include_directories(backend-${tag}-tests PRIVATE src/native tests tests/fixtures)
   target_link_libraries(backend-${tag}-tests PRIVATE spine-backend-${tag})
   target_compile_features(backend-${tag}-tests PRIVATE c_std_11)
@@ -189,7 +189,7 @@ if(UNIX)
 endif()
 add_test(NAME antialiasing-tests COMMAND antialiasing-tests)
 
-add_executable(backends-tests tests/backends-test.c src/native/backends.c src/native/atlas-image.c src/native/draw-list.c src/skeleton-binary.c)
+add_executable(backends-tests tests/backends-test.c src/native/backends.c src/native/atlas-image.c src/native/draw-list.c src/native/skeleton-version.c src/skeleton-binary.c)
 target_include_directories(backends-tests PRIVATE src src/native tests)
 target_link_libraries(backends-tests PRIVATE spine-backend-37 spine-backend-40 spine-backend-41)
 target_compile_features(backends-tests PRIVATE c_std_11)

@@ -7,14 +7,17 @@
 #if SPINE_BACKEND_VERSION == 41
 #define BACKEND_NAME "4.1"
 #define BACKEND_BINARY_FORMAT SKELETON_BINARY_41
+#define BACKEND_FAMILY SPINE_FAMILY_41
 #define BACKEND_ENTRY spine_backend_41
 #elif SPINE_BACKEND_VERSION == 40
 #define BACKEND_NAME "4.0"
 #define BACKEND_BINARY_FORMAT SKELETON_BINARY_40
+#define BACKEND_FAMILY SPINE_FAMILY_40
 #define BACKEND_ENTRY spine_backend_40
 #elif SPINE_BACKEND_VERSION == 37
 #define BACKEND_NAME "3.7"
 #define BACKEND_BINARY_FORMAT SKELETON_BINARY_37
+#define BACKEND_FAMILY SPINE_FAMILY_37
 #define BACKEND_ENTRY spine_backend_37
 #else
 #error "SPINE_BACKEND_VERSION must be 37, 40 or 41"
@@ -24,6 +27,7 @@
 #include "atlas-image.h"
 #include "draw-list.h"
 #include "skeleton-binary.h"
+#include "skeleton-version.h"
 
 #include <spine/spine.h>
 #include <spine/extension.h>
@@ -317,8 +321,17 @@ static bool load_skeleton(struct spine_asset *asset, const char *skeleton_path, 
 		if (binary)
 			spSkeletonBinary_dispose(binary);
 	} else {
+		/* Another version's JSON layout crashes spine-c's reader (for example 3.7 vs 4.x skins),
+		 * so the export must declare this backend's version family. */
+		char version[32] = "";
+		if (skeleton_version_detect((const uint8_t *)bytes, size, true, version, sizeof(version)) != BACKEND_FAMILY) {
+			set_error(error, error_size, "skeleton %s is Spine %s, not Spine " BACKEND_NAME, skeleton_path,
+				  version[0] ? version : "of an unknown version");
+			free(bytes);
+			return false;
+		}
 #if SPINE_BACKEND_VERSION < 41
-		/* spine-c 4.0 copies skeleton.hash and skeleton.spine without a NULL check. */
+		/* spine-c 3.7/4.0 copy skeleton.hash and skeleton.spine without a NULL check. */
 		Json *root = Json_create(bytes);
 		Json *skeleton = root ? Json_getItem(root, "skeleton") : NULL;
 		const bool complete = !skeleton || (Json_getString(skeleton, "hash", NULL) &&
