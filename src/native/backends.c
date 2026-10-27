@@ -14,6 +14,13 @@ const struct spine_backend *spine_backend_for_family(enum spine_family family)
 	}
 }
 
+void spine_backends_set_host_allocator(const struct spine_allocator *allocator)
+{
+	spine_backend_37()->set_allocator(NULL);
+	spine_backend_40()->set_allocator(allocator);
+	spine_backend_41()->set_allocator(allocator);
+}
+
 const struct spine_backend *const *spine_backends_all(size_t *count)
 {
 	static const struct spine_backend *all[3];

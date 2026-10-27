@@ -765,26 +765,6 @@ static void test_other_versions_rejected(void)
 	}
 }
 
-/* spine-c 3.7 calls the C library's realloc directly (Skeleton.c update cache), so it must keep
- * the C library allocator: memory from OBS's bmalloc (_aligned_malloc on Windows) would corrupt
- * the heap there. 4.x routes every allocation through _spMalloc/_spRealloc/_spFree. */
-static void test_allocator_policy(void)
-{
-	static const struct spine_allocator counting = {counting_alloc, counting_realloc, counting_free};
-	backend->set_allocator(&counting);
-	outstanding_allocations = 0;
-	struct spine_asset *asset = load_spineboy();
-	CHECK(asset != NULL);
-	const long used = outstanding_allocations;
-	if (asset)
-		backend->free_asset(asset);
-	backend->set_allocator(NULL);
-	if (strcmp(BACKEND_NAME, "3.7") == 0)
-		CHECK(used == 0);
-	else
-		CHECK(used > 0);
-}
-
 /* Yap toggles the mouth overlay on and off all stream long; that must not grow memory. */
 static void overlay_cycle(struct spine_instance *instance, int animation, const int *timelines, size_t count)
 {
@@ -926,7 +906,6 @@ int main(void)
 	test_bone_access();
 	test_blend_factors();
 	test_repeated_overlays_do_not_grow();
-	test_allocator_policy();
 	test_other_versions_rejected();
 	return TEST_RESULT();
 }

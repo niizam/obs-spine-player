@@ -462,10 +462,7 @@ struct native_renderer *native_renderer_create(obs_source_t *owner)
 	renderer->applied = renderer->controls;
 	if (!allocator_set) {
 		static const struct spine_allocator obs_allocator = {bmalloc, brealloc, bfree};
-		size_t count = 0;
-		const struct spine_backend *const *backends = spine_backends_all(&count);
-		for (size_t i = 0; i < count; i++)
-			backends[i]->set_allocator(&obs_allocator);
+		spine_backends_set_host_allocator(&obs_allocator);
 		allocator_set = true;
 	}
 	pthread_mutex_init(&renderer->mutex, NULL);

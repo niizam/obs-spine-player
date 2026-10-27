@@ -190,15 +190,8 @@ static void host_free(void *pointer)
 
 static void set_allocator(const struct spine_allocator *allocator)
 {
-#if SPINE_BACKEND_VERSION < 40
-	/* spine-c 3.7 reallocates its skeleton update cache with the C library's realloc
-	 * (Skeleton.c), so its memory must come from the C library too: a host allocator
-	 * such as OBS's bmalloc (_aligned_malloc on Windows) would corrupt the heap. */
-	(void)allocator;
-	host_allocator = (struct spine_allocator){0};
-#else
+	/* spine_backends_set_host_allocator decides which runtimes may use a host allocator. */
 	host_allocator = allocator ? *allocator : (struct spine_allocator){0};
-#endif
 	_spSetMalloc(host_alloc);
 	_spSetRealloc(host_realloc);
 	_spSetFree(host_free);
