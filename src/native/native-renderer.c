@@ -1,9 +1,12 @@
 #include "native-renderer.h"
 
 #include "draw-list.h"
+#include "eye-tracker.h"
 #include "framing.h"
 #include "load-gate.h"
+#include "mouth-plan.h"
 #include "spine-backend.h"
+#include "state-machine.h"
 
 #include <graphics/image-file.h>
 #include <graphics/vec4.h>
@@ -21,6 +24,13 @@
 /* libobs has no query for the device limit; 16384 is the Direct3D 11 (feature
  * level 11) maximum and what OpenGL 3.3-class hardware OBS supports offers. */
 #define NATIVE_MAX_TEXTURE_SIZE 16384
+#define NATIVE_COMMAND_CAPACITY 8
+
+struct native_command {
+	bool reset;
+	bool loop;
+	char animation[256];
+};
 
 struct load_result {
 	uint64_t generation;
@@ -50,8 +60,20 @@ struct native_renderer {
 	char default_animation[256];
 	uint32_t width, height;
 	bool config_changed;
+	struct native_controls controls;
+	bool controls_changed;
+	bool yap_requested;
+	bool yap_changed;
+	float cursor_x, cursor_y;
+	bool cursor_changed;
+	struct native_command commands[NATIVE_COMMAND_CAPACITY];
+	size_t command_head, command_count;
 
 	/* Graphics thread only. */
+	struct state_machine *machine;
+	struct eye_tracker *eyes;
+	struct native_controls applied;
+	bool yap_input; /* latest yap gate state, copied from yap_requested */
 	struct spine_asset *asset;
 	struct spine_instance *instance;
 	gs_texture_t **textures;
@@ -87,6 +109,164 @@ static void native_log(const struct native_renderer *renderer, int level, const 
 	va_end(arguments);
 	const char *name = renderer && renderer->owner ? obs_source_get_name(renderer->owner) : NULL;
 	blog(level, "[OBS Spine Player: %s] %s", name && *name ? name : "unnamed source", message);
+}
+
+/* ---- controls: state machine and eye tracker callbacks (graphics thread) ---- */
+
+static void machine_set(void *param, int track, const char *name, bool loop)
+{
+	struct native_renderer *renderer = param;
+	renderer->backend->set_animation(renderer->instance, track, name, loop);
+}
+
+static void machine_add(void *param, int track, const char *name, bool loop, float delay)
+{
+	struct native_renderer *renderer = param;
+	renderer->backend->add_animation(renderer->instance, track, name, loop, delay);
+}
+
+static void machine_empty(void *param, int track, float mix)
+{
+	struct native_renderer *renderer = param;
+	renderer->backend->set_empty_animation(renderer->instance, track, mix);
+}
+
+static void machine_overlay(void *param, int track, const struct mouth_plan *plan)
+{
+	struct native_renderer *renderer = param;
+	renderer->backend->set_overlay(renderer->instance, track, plan->animation, plan->timelines,
+				       plan->timeline_count, plan->start, plan->end, true);
+}
+
+static void join_names(char *out, size_t size, char **names, size_t count, const char *empty)
+{
+	out[0] = '\0';
+	size_t used = 0;
+	for (size_t i = 0; i < count && used < size; i++) {
+		const int written = snprintf(out + used, size - used, "%s%s", i ? ", " : "", names[i]);
+		used += written > 0 ? (size_t)written : 0;
+	}
+	if (!count && empty)
+		snprintf(out, size, "%s", empty);
+}
+
+/* Same messages as the browser player's logYapPlan. */
+static void log_yap_plan(const struct native_renderer *renderer, const struct mouth_plan *plan)
+{
+	const struct spine_skeleton_desc *desc = renderer->backend->describe(renderer->asset);
+	char list[512], bones[512];
+	if (plan->missing_count) {
+		join_names(list, sizeof(list), plan->missing_slots, plan->missing_count, NULL);
+		native_log(renderer, LOG_WARNING, "Mouth slots not found: %s", list);
+	}
+	if (plan->mode == MOUTH_PLAN_OVERLAY) {
+		join_names(list, sizeof(list), plan->slots, plan->slot_count, NULL);
+		join_names(bones, sizeof(bones), plan->bones, plan->bone_count, "none");
+		native_log(renderer, LOG_INFO, "Yap mode uses a mouth-only loop from '%s' (%.2fs-%.2fs); slots: %s; bones: %s",
+			   desc->animations[plan->animation].name, plan->start, plan->end, list, bones);
+	} else if (plan->mode == MOUTH_PLAN_ANIMATION) {
+		native_log(renderer, LOG_INFO, "Yap mode plays '%s' on the mouth track",
+			   desc->animations[plan->animation].name);
+	} else {
+		native_log(renderer, LOG_WARNING,
+			   "Yap mode has no mouth animation: '%s' is not in this skeleton and no talking mouth was detected",
+			   plan->requested[0] ? plan->requested : "auto");
+	}
+}
+
+static void machine_plan(void *param, const char *yap_animation, const char *mouth_slots, struct mouth_plan *out)
+{
+	struct native_renderer *renderer = param;
+	const struct spine_skeleton_desc *desc = renderer->backend->describe(renderer->asset);
+	if (!desc || !mouth_plan_build(desc, yap_animation, mouth_slots, out)) {
+		memset(out, 0, sizeof(*out));
+		out->animation = -1;
+		native_log(renderer, LOG_ERROR, "Yap mode could not be planned: out of memory");
+		return;
+	}
+	log_yap_plan(renderer, out);
+}
+
+static int eyes_find_slot_bone(void *param, const char *slot)
+{
+	struct native_renderer *renderer = param;
+	return renderer->backend->find_slot_bone(renderer->instance, slot);
+}
+
+static bool eyes_parent_matrix(void *param, int bone, float m[4])
+{
+	struct native_renderer *renderer = param;
+	return renderer->backend->bone_parent_matrix(renderer->instance, bone, m);
+}
+
+static void eyes_translate(void *param, int bone, float dx, float dy)
+{
+	struct native_renderer *renderer = param;
+	renderer->backend->bone_translate(renderer->instance, bone, dx, dy);
+}
+
+static void eyes_update_world(void *param)
+{
+	struct native_renderer *renderer = param;
+	renderer->backend->update_world_transform(renderer->instance);
+}
+
+static const char *eyes_bone_name(void *param, int bone)
+{
+	struct native_renderer *renderer = param;
+	const struct spine_skeleton_desc *desc = renderer->backend->describe(renderer->asset);
+	return desc && bone >= 0 && (size_t)bone < desc->bone_count ? desc->bones[bone].name : NULL;
+}
+
+static void eyes_log(void *param, bool warning, const char *message)
+{
+	native_log(param, warning ? LOG_WARNING : LOG_INFO, "%s", message);
+}
+
+static struct state_machine_options machine_options(const struct native_renderer *renderer, const char *animation)
+{
+	return (struct state_machine_options){animation, renderer->applied.state_enabled,
+					      renderer->applied.yap_animation, renderer->applied.mouth_slots};
+}
+
+static struct eye_tracker_options eye_options(const struct native_renderer *renderer)
+{
+	return (struct eye_tracker_options){renderer->applied.eye_enabled, renderer->applied.eye_left,
+					    renderer->applied.eye_right, renderer->applied.eye_max_x,
+					    renderer->applied.eye_max_y, renderer->applied.eye_smoothing_ms};
+}
+
+static void destroy_controllers(struct native_renderer *renderer)
+{
+	eye_tracker_destroy(renderer->eyes); /* restores the eye bones while the instance still exists */
+	renderer->eyes = NULL;
+	state_machine_destroy(renderer->machine);
+	renderer->machine = NULL;
+}
+
+static void create_controllers(struct native_renderer *renderer, const char *default_animation)
+{
+	const size_t count = renderer->backend->animation_count(renderer->asset);
+	const char **names = bzalloc(sizeof(char *) * (count ? count : 1));
+	for (size_t i = 0; i < count; i++)
+		names[i] = renderer->backend->animation_name(renderer->asset, i);
+	static const struct state_machine_ops machine_ops_template = {NULL,          machine_set,     machine_add,
+								      machine_empty, machine_overlay, machine_plan};
+	struct state_machine_ops machine_ops = machine_ops_template;
+	machine_ops.param = renderer;
+	const struct state_machine_options options = machine_options(renderer, default_animation);
+	renderer->machine = state_machine_create(&machine_ops, names, count, &options);
+	bfree((void *)names);
+	state_machine_reset(renderer->machine);
+
+	static const struct eye_tracker_ops eye_ops_template = {NULL,           eyes_find_slot_bone, eyes_parent_matrix,
+								  eyes_translate, eyes_update_world,   eyes_bone_name,
+								  eyes_log};
+	struct eye_tracker_ops eye_ops = eye_ops_template;
+	eye_ops.param = renderer;
+	const struct eye_tracker_options eyes = eye_options(renderer);
+	renderer->eyes = eye_tracker_create(&eye_ops, &eyes);
+	state_machine_set_yapping(renderer->machine, renderer->applied.yap_enabled && renderer->yap_input, false);
 }
 
 /* ---- decoding through libobs (no graphics context needed) ---- */
@@ -258,6 +438,12 @@ struct native_renderer *native_renderer_create(obs_source_t *owner)
 	struct native_renderer *renderer = bzalloc(sizeof(*renderer));
 	renderer->owner = owner;
 	renderer->backend = spine_backend_41();
+	renderer->controls = (struct native_controls){.state_enabled = true,
+						      .yap_animation = "auto",
+						      .eye_max_x = 6.0,
+						      .eye_max_y = 4.0,
+						      .eye_smoothing_ms = 90.0};
+	renderer->applied = renderer->controls;
 	if (!allocator_set) {
 		static const struct spine_allocator obs_allocator = {bmalloc, brealloc, bfree};
 		renderer->backend->set_allocator(&obs_allocator);
@@ -274,6 +460,7 @@ struct native_renderer *native_renderer_create(obs_source_t *owner)
 
 static void release_skeleton(struct native_renderer *renderer)
 {
+	destroy_controllers(renderer);
 	if (renderer->instance)
 		renderer->backend->free_instance(renderer->instance);
 	renderer->instance = NULL;
@@ -434,6 +621,12 @@ static void adopt_posted(struct native_renderer *renderer)
 			if (!renderer->instance) {
 				native_log(renderer, LOG_ERROR, "native renderer could not create a skeleton instance");
 				release_skeleton(renderer);
+			} else {
+				char animation[256];
+				pthread_mutex_lock(&renderer->mutex);
+				snprintf(animation, sizeof(animation), "%s", renderer->default_animation);
+				pthread_mutex_unlock(&renderer->mutex);
+				create_controllers(renderer, animation);
 			}
 		}
 		if (!renderer->instance) {
@@ -482,19 +675,18 @@ static void apply_config(struct native_renderer *renderer)
 		return;
 
 	if (animation_changed || !renderer->framed) {
-		renderer->resolved[0] = 0;
-		if (renderer->backend->set_animation(renderer->instance, 0, animation, true)) {
-			snprintf(renderer->resolved, sizeof(renderer->resolved), "%s", animation);
-		} else if (renderer->backend->animation_count(renderer->asset)) {
-			const char *first = renderer->backend->animation_name(renderer->asset, 0);
-			native_log(renderer, LOG_WARNING, "animation '%s' is not in this skeleton; playing '%s'",
-				   animation, first);
-			renderer->backend->set_animation(renderer->instance, 0, first, true);
-			snprintf(renderer->resolved, sizeof(renderer->resolved), "%s", first);
-		}
-		renderer->backend->update(renderer->instance, 0.0f);
+		const struct state_machine_options options = machine_options(renderer, animation);
+		state_machine_configure(renderer->machine, &options);
+		const char *playing = state_machine_default_animation(renderer->machine);
+		snprintf(renderer->resolved, sizeof(renderer->resolved), "%s", playing ? playing : "");
+		if (playing && astrcmpi(playing, animation) != 0)
+			native_log(renderer, LOG_WARNING,
+				   "Configured default animation '%s' is not present in the loaded skeleton; playing '%s'",
+				   animation, playing);
 	}
 	const char *resolved = renderer->resolved[0] ? renderer->resolved : NULL;
+	/* Bounds sampling resets the pose; take the eye offsets out first so they cannot drift. */
+	eye_tracker_before_frame(renderer->eyes);
 
 	struct spine_bounds bounds = {0};
 	bool have_bounds = resolved && renderer->backend->animation_bounds(renderer->instance, resolved, &bounds);
@@ -676,12 +868,130 @@ static void composite(struct native_renderer *renderer, uint32_t width, uint32_t
 	gs_enable_framebuffer_srgb(previous_srgb);
 }
 
+/* Applies control input that arrived from other threads. */
+static void drain_inputs(struct native_renderer *renderer)
+{
+	struct native_command commands[NATIVE_COMMAND_CAPACITY];
+	struct native_controls controls;
+	char animation[256];
+	pthread_mutex_lock(&renderer->mutex);
+	const bool controls_changed = renderer->controls_changed;
+	const bool yap_changed = renderer->yap_changed;
+	const bool cursor_changed = renderer->cursor_changed;
+	controls = renderer->controls;
+	const bool yap = renderer->yap_requested;
+	const float cursor_x = renderer->cursor_x, cursor_y = renderer->cursor_y;
+	const size_t command_count = renderer->command_count;
+	for (size_t i = 0; i < command_count; i++)
+		commands[i] = renderer->commands[(renderer->command_head + i) % NATIVE_COMMAND_CAPACITY];
+	renderer->command_count = 0;
+	renderer->controls_changed = false;
+	renderer->yap_changed = false;
+	renderer->cursor_changed = false;
+	snprintf(animation, sizeof(animation), "%s", renderer->default_animation);
+	pthread_mutex_unlock(&renderer->mutex);
+
+	if (controls_changed)
+		renderer->applied = controls;
+	if (yap_changed)
+		renderer->yap_input = yap;
+	if (renderer->machine) {
+		if (controls_changed) {
+			const struct state_machine_options options =
+				machine_options(renderer, renderer->animation[0] ? renderer->animation : animation);
+			state_machine_configure(renderer->machine, &options);
+			const struct eye_tracker_options eyes = eye_options(renderer);
+			eye_tracker_configure(renderer->eyes, &eyes);
+		}
+		if (controls_changed || yap_changed)
+			state_machine_set_yapping(renderer->machine, renderer->applied.yap_enabled && renderer->yap_input,
+						  false);
+		for (size_t i = 0; i < command_count; i++) {
+			if (commands[i].reset)
+				state_machine_reset(renderer->machine);
+			else
+				state_machine_trigger(renderer->machine, commands[i].animation, commands[i].loop);
+		}
+	}
+	if (cursor_changed && renderer->eyes)
+		eye_tracker_set_target(renderer->eyes, cursor_x, cursor_y);
+}
+
 void native_renderer_tick(struct native_renderer *renderer, float seconds)
 {
-	if (!renderer || !renderer->instance || !obs_source_showing(renderer->owner))
+	if (!renderer)
 		return;
+	drain_inputs(renderer);
+	if (!renderer->instance || !obs_source_showing(renderer->owner))
+		return;
+	eye_tracker_before_frame(renderer->eyes);
 	renderer->backend->update(renderer->instance, seconds);
+	eye_tracker_after_update(renderer->eyes, seconds);
 	renderer->needs_redraw = true;
+}
+
+/* ---- control input from any thread ---- */
+
+void native_renderer_set_controls(struct native_renderer *renderer, const struct native_controls *controls)
+{
+	if (!renderer || !controls)
+		return;
+	pthread_mutex_lock(&renderer->mutex);
+	if (memcmp(&renderer->controls, controls, sizeof(*controls)) != 0) {
+		renderer->controls = *controls;
+		renderer->controls_changed = true;
+	}
+	pthread_mutex_unlock(&renderer->mutex);
+}
+
+void native_renderer_set_yapping(struct native_renderer *renderer, bool active)
+{
+	if (!renderer)
+		return;
+	pthread_mutex_lock(&renderer->mutex);
+	renderer->yap_requested = active;
+	renderer->yap_changed = true;
+	pthread_mutex_unlock(&renderer->mutex);
+}
+
+void native_renderer_set_cursor(struct native_renderer *renderer, float x, float y)
+{
+	if (!renderer)
+		return;
+	pthread_mutex_lock(&renderer->mutex);
+	renderer->cursor_x = x;
+	renderer->cursor_y = y;
+	renderer->cursor_changed = true;
+	pthread_mutex_unlock(&renderer->mutex);
+}
+
+static void queue_command(struct native_renderer *renderer, const struct native_command *command)
+{
+	pthread_mutex_lock(&renderer->mutex);
+	if (renderer->command_count == NATIVE_COMMAND_CAPACITY) {
+		renderer->command_head = (renderer->command_head + 1) % NATIVE_COMMAND_CAPACITY;
+		renderer->command_count--;
+	}
+	renderer->commands[(renderer->command_head + renderer->command_count) % NATIVE_COMMAND_CAPACITY] = *command;
+	renderer->command_count++;
+	pthread_mutex_unlock(&renderer->mutex);
+}
+
+void native_renderer_trigger(struct native_renderer *renderer, const char *animation, bool loop)
+{
+	if (!renderer || !animation || !*animation)
+		return;
+	struct native_command command = {false, loop, ""};
+	snprintf(command.animation, sizeof(command.animation), "%s", animation);
+	queue_command(renderer, &command);
+}
+
+void native_renderer_reset(struct native_renderer *renderer)
+{
+	if (!renderer)
+		return;
+	const struct native_command command = {true, false, ""};
+	queue_command(renderer, &command);
 }
 
 void native_renderer_render(struct native_renderer *renderer)

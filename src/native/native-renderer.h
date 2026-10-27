@@ -19,6 +19,18 @@ enum native_renderer_state {
 
 struct native_renderer;
 
+/* Character controls, mirroring what the browser player receives. */
+struct native_controls {
+	bool state_enabled;
+	bool yap_enabled;
+	char yap_animation[256];
+	char mouth_slots[512];
+	bool eye_enabled;
+	char eye_left[512];
+	char eye_right[512];
+	double eye_max_x, eye_max_y, eye_smoothing_ms;
+};
+
 struct native_renderer *native_renderer_create(obs_source_t *owner);
 /* Joins the loader thread and frees GPU resources inside obs_enter_graphics. */
 void native_renderer_destroy(struct native_renderer *renderer);
@@ -29,7 +41,14 @@ void native_renderer_load(struct native_renderer *renderer, const char *skeleton
 /* UI thread. Changes the default animation and source size without reloading. */
 void native_renderer_configure(struct native_renderer *renderer, const char *default_animation, uint32_t width,
 			       uint32_t height);
-/* Graphics thread. Does nothing while the owning source is not showing. */
+/* Any thread. Applied on the next tick, also before the skeleton has loaded. */
+void native_renderer_set_controls(struct native_renderer *renderer, const struct native_controls *controls);
+void native_renderer_set_yapping(struct native_renderer *renderer, bool active);
+void native_renderer_set_cursor(struct native_renderer *renderer, float x, float y);
+/* Emotion/action hotkeys; queued in order (oldest dropped beyond 8). */
+void native_renderer_trigger(struct native_renderer *renderer, const char *animation, bool loop);
+void native_renderer_reset(struct native_renderer *renderer);
+/* Graphics thread. Applies control input; animates only while the owning source is showing. */
 void native_renderer_tick(struct native_renderer *renderer, float seconds);
 /* Graphics thread. */
 void native_renderer_render(struct native_renderer *renderer);
