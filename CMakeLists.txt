@@ -45,6 +45,8 @@ target_sources(
     src/native/skeleton-desc.h
     src/native/mouth-plan.c
     src/native/mouth-plan.h
+    src/native/state-machine.c
+    src/native/state-machine.h
 )
 target_include_directories(obs-spine-player PRIVATE src src/native)
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
@@ -141,6 +143,14 @@ if(UNIX)
   target_link_libraries(mouth-plan-tests PRIVATE m)
 endif()
 add_test(NAME mouth-plan-tests COMMAND mouth-plan-tests)
+
+add_executable(state-machine-tests tests/state-machine-test.c src/native/state-machine.c src/native/mouth-plan.c)
+target_include_directories(state-machine-tests PRIVATE src/native tests)
+target_compile_features(state-machine-tests PRIVATE c_std_11)
+if(UNIX)
+  target_link_libraries(state-machine-tests PRIVATE m)
+endif()
+add_test(NAME state-machine-tests COMMAND state-machine-tests)
 
 add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
 target_include_directories(level-gate-tests PRIVATE src)
