@@ -882,6 +882,21 @@ static bool set_overlay(struct spine_instance *instance, int track, int source_a
 	for (size_t i = 0; i < count; i++)
 		if (timelines[i] < 0 || timelines[i] >= source->timelines->size)
 			return false;
+	/* Yap toggles reuse the latest overlay when it is built from the same timelines. */
+	if (instance->overlay_count) {
+		spAnimation *last = instance->overlays[instance->overlay_count - 1];
+		bool same = last->timelines->size == (int)count && last->duration == source->duration;
+		for (size_t i = 0; same && i < count; i++)
+			same = last->timelines->items[i] == source->timelines->items[timelines[i]];
+		if (same) {
+			spTrackEntry *entry = spAnimationState_setAnimation(instance->state, track, last, loop ? 1 : 0);
+			if (entry) {
+				entry->animationStart = start;
+				entry->animationEnd = end;
+			}
+			return true;
+		}
+	}
 	if (instance->overlay_count == instance->overlay_capacity) {
 		const size_t capacity = instance->overlay_capacity ? instance->overlay_capacity * 2 : 4;
 		spAnimation **grown = realloc(instance->overlays, capacity * sizeof(*grown));

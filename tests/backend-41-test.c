@@ -722,6 +722,44 @@ static void test_animation_queue_and_overlay(void)
 	backend->free_asset(asset); /* shared timelines must be freed exactly once */
 }
 
+/* Yap toggles the mouth overlay on and off all stream long; that must not grow memory. */
+static void overlay_cycle(struct spine_instance *instance, int animation, const int *timelines, size_t count)
+{
+	backend->set_overlay(instance, 1, animation, timelines, count, 0.1f, 0.5f, true);
+	backend->update(instance, 0.05f);
+	backend->set_empty_animation(instance, 1, 0.08f);
+	backend->update(instance, 0.2f);
+}
+
+static void test_repeated_overlays_do_not_grow(void)
+{
+	static const struct spine_allocator counting = {counting_alloc, counting_realloc, counting_free};
+	backend->set_allocator(&counting);
+	outstanding_allocations = 0;
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (asset) {
+		const struct spine_skeleton_desc *desc = backend->describe(asset);
+		const int run = find_animation_index(desc, "run");
+		int selected[8];
+		size_t count = 0;
+		for (int t = 0; t < desc->animations[run].timeline_count && count < 8; t++)
+			if (desc->animations[run].timelines[t].kind == SPINE_TIMELINE_SLOT)
+				selected[count++] = t;
+		struct spine_instance *instance = backend->create_instance(asset);
+		overlay_cycle(instance, run, selected, count);
+		const long baseline = outstanding_allocations;
+		for (int i = 0; i < 50; i++)
+			overlay_cycle(instance, run, selected, count);
+		CHECK(outstanding_allocations == baseline);
+		if (outstanding_allocations != baseline)
+			fprintf(stderr, "50 yap cycles left %ld more allocation(s)\n", outstanding_allocations - baseline);
+		backend->free_instance(instance);
+		backend->free_asset(asset);
+	}
+	backend->set_allocator(NULL);
+}
+
 static double vertex_sum(const struct spine_draw_list *list)
 {
 	double sum = 0;
@@ -795,5 +833,6 @@ int main(void)
 	test_describe();
 	test_animation_queue_and_overlay();
 	test_bone_access();
+	test_repeated_overlays_do_not_grow();
 	return TEST_RESULT();
 }
