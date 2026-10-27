@@ -1,6 +1,7 @@
 #include "native-renderer.h"
 
 #include "backends.h"
+#include "blend.h"
 #include "draw-list.h"
 #include "eye-tracker.h"
 #include "framing.h"
@@ -830,8 +831,9 @@ static void set_blend(const struct spine_backend *backend, enum spine_blend blen
 {
 	if (backend->blend_factors && blend >= SPINE_BLEND_NORMAL && blend <= SPINE_BLEND_SCREEN) {
 		const struct spine_blend_factors *f = &backend->blend_factors[blend];
-		gs_blend_function_separate(gs_factor(f->src_color), gs_factor(f->dst_color), gs_factor(f->src_alpha),
-					   gs_factor(f->dst_alpha));
+		gs_blend_function_separate(gs_factor(f->src_color), gs_factor(f->dst_color),
+					   gs_factor(spine_alpha_factor(f->src_alpha)),
+					   gs_factor(spine_alpha_factor(f->dst_alpha)));
 		return;
 	}
 	switch (blend) {

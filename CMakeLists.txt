@@ -57,6 +57,8 @@ target_sources(
     src/native/antialiasing.h
     src/native/backends.c
     src/native/backends.h
+    src/native/blend.c
+    src/native/blend.h
 )
 target_include_directories(obs-spine-player PRIVATE src src/native)
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-37 spine-backend-40 spine-backend-41)
@@ -197,6 +199,14 @@ if(UNIX)
   target_link_libraries(backends-tests PRIVATE m pthread)
 endif()
 add_test(NAME backends-tests COMMAND backends-tests)
+
+add_executable(blend-tests tests/blend-test.c src/native/blend.c)
+target_include_directories(blend-tests PRIVATE src/native tests)
+target_compile_features(blend-tests PRIVATE c_std_11)
+if(UNIX)
+  target_link_libraries(blend-tests PRIVATE m)
+endif()
+add_test(NAME blend-tests COMMAND blend-tests)
 
 add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
 target_include_directories(level-gate-tests PRIVATE src)
