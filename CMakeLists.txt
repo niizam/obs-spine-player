@@ -42,6 +42,9 @@ target_sources(
     src/native/load-gate.h
     src/native/native-renderer.c
     src/native/native-renderer.h
+    src/native/skeleton-desc.h
+    src/native/mouth-plan.c
+    src/native/mouth-plan.h
 )
 target_include_directories(obs-spine-player PRIVATE src src/native)
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
@@ -130,6 +133,14 @@ if(UNIX)
   target_link_libraries(framing-tests PRIVATE m)
 endif()
 add_test(NAME framing-tests COMMAND framing-tests)
+
+add_executable(mouth-plan-tests tests/mouth-plan-test.c src/native/mouth-plan.c)
+target_include_directories(mouth-plan-tests PRIVATE src/native tests)
+target_compile_features(mouth-plan-tests PRIVATE c_std_11)
+if(UNIX)
+  target_link_libraries(mouth-plan-tests PRIVATE m)
+endif()
+add_test(NAME mouth-plan-tests COMMAND mouth-plan-tests)
 
 add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
 target_include_directories(level-gate-tests PRIVATE src)
