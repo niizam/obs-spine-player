@@ -17,6 +17,51 @@ function(spine_runtime_compile_options target)
   set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endfunction()
 
+# Prefixed runtime plus its version adapter, as one static library. Every source is
+# compiled with the generated rename header forced in, and a CTest check verifies
+# that nothing in the library defines an external symbol without the prefix.
+function(spine_add_backend)
+  cmake_parse_arguments(SPINE "" "VERSION;PREFIX" "SOURCES" ${ARGN})
+  string(REPLACE "." "" tag "${SPINE_VERSION}")
+  set(target spine-backend-${tag})
+  set(prefix_header "${CMAKE_CURRENT_SOURCE_DIR}/src/native/spine${tag}-prefix.h")
+  spine_runtime_sources(${SPINE_VERSION} runtime_sources)
+
+  add_library(${target} STATIC ${runtime_sources} ${SPINE_SOURCES})
+  target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/native")
+  target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spine-c-${SPINE_VERSION}/include")
+  target_compile_features(${target} PRIVATE c_std_11)
+  set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE "/FI${prefix_header}")
+    # Upstream code is built quietly; the adapter is ours and keeps the project's level.
+    set_source_files_properties(${runtime_sources} TARGET_DIRECTORY ${target} PROPERTIES COMPILE_OPTIONS "/W0")
+    set_source_files_properties(${SPINE_SOURCES} TARGET_DIRECTORY ${target} PROPERTIES COMPILE_OPTIONS "/W4")
+  else()
+    target_compile_options(${target} PRIVATE -include "${prefix_header}")
+    set_source_files_properties(${runtime_sources} TARGET_DIRECTORY ${target} PROPERTIES COMPILE_OPTIONS "-w")
+    set_source_files_properties(${SPINE_SOURCES} TARGET_DIRECTORY ${target} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
+  endif()
+
+  if(NODE_EXECUTABLE)
+    if(MSVC)
+      get_filename_component(compiler_dir "${CMAKE_C_COMPILER}" DIRECTORY)
+      find_program(SPINE_SYMBOL_TOOL dumpbin HINTS "${compiler_dir}")
+    else()
+      set(SPINE_SYMBOL_TOOL "${CMAKE_NM}")
+    endif()
+    if(SPINE_SYMBOL_TOOL)
+      add_test(
+        NAME spine${tag}-prefix-check
+        COMMAND "${NODE_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check-spine-prefix.js" --tool "${SPINE_SYMBOL_TOOL}"
+                --prefix ${SPINE_PREFIX} --allow spine_backend_${tag} "$<TARGET_FILE:${target}>"
+      )
+    else()
+      message(WARNING "No dumpbin/nm found; spine${tag}-prefix-check is not registered")
+    endif()
+  endif()
+endfunction()
+
 # Unprefixed build of a vendored runtime. Only used to dump its symbol table when
 # regenerating the prefix header (see tools/generate-spine-prefix.js).
 function(spine_add_raw_runtime version)

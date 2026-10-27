@@ -6,8 +6,12 @@ include(GNUInstallDirs)
 
 find_package(libobs CONFIG REQUIRED)
 
+enable_testing()
+find_program(NODE_EXECUTABLE node)
+
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/spine-runtime.cmake")
 spine_add_raw_runtime(4.1)
+spine_add_backend(VERSION 4.1 PREFIX sp41_ SOURCES src/native/backend-41.c)
 
 add_library(obs-spine-player MODULE)
 target_sources(
@@ -27,7 +31,7 @@ target_sources(
     src/spine-source.c
     src/spine-source.h
 )
-target_link_libraries(obs-spine-player PRIVATE OBS::libobs)
+target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
 if(WIN32)
   target_link_libraries(obs-spine-player PRIVATE user32)
 elseif(APPLE)
@@ -72,8 +76,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/characters")
   install(DIRECTORY characters/ DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}/characters")
 endif()
 
-enable_testing()
-find_program(NODE_EXECUTABLE node)
 if(NODE_EXECUTABLE)
   file(GLOB PLAYER_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.test.js")
   add_test(NAME player-state-tests COMMAND "${NODE_EXECUTABLE}" --test ${PLAYER_TEST_FILES})
