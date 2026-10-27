@@ -379,12 +379,18 @@ static struct load_result *load_asset(struct native_renderer *renderer, const ch
 			   result->version);
 	else if (forced != SPINE_FAMILY_UNKNOWN)
 		family = forced;
-	if (!result->version[0])
+	const bool version_found = result->version[0] != '\0';
+	if (!version_found)
 		snprintf(result->version, sizeof(result->version), "unknown");
 	result->backend = spine_backend_for_family(family);
 	if (!result->backend) {
-		native_log(renderer, LOG_ERROR, "Spine %s is not supported; the plugin draws Spine 3.7, 4.0 and 4.1 exports",
-			   result->version);
+		if (version_found)
+			native_log(renderer, LOG_ERROR,
+				   "Spine %s is not supported; the plugin draws Spine 3.7, 4.0 and 4.1 exports",
+				   result->version);
+		else
+			native_log(renderer, LOG_ERROR,
+				   "could not detect the Spine version of %s; choose it under Spine runtime", skeleton);
 		result->state = NATIVE_UNSUPPORTED;
 		return result;
 	}
