@@ -362,19 +362,260 @@ static void update(struct spine_instance *instance, float seconds)
 	spSkeleton_updateWorldTransform(instance->skeleton);
 }
 
-static bool animation_bounds(struct spine_instance *instance, const char *name, struct spine_bounds *out)
+static bool ensure_world(struct spine_instance *instance, size_t floats)
 {
-	(void)instance;
-	(void)name;
-	(void)out;
-	return false;
+	if (floats <= instance->world_capacity)
+		return true;
+	size_t capacity = instance->world_capacity ? instance->world_capacity : 64;
+	while (capacity < floats)
+		capacity *= 2;
+	float *world = realloc(instance->world, capacity * sizeof(*world));
+	if (!world)
+		return false;
+	instance->world = world;
+	instance->world_capacity = capacity;
+	return true;
 }
 
+/* World vertices of a region or mesh attachment into instance->world; returns the
+ * float count, 0 for other attachment types, or -1 on allocation failure. */
+static int attachment_world_vertices(struct spine_instance *instance, spSlot *slot, spAttachment *attachment)
+{
+	if (attachment->type == SP_ATTACHMENT_REGION) {
+		if (!ensure_world(instance, 8))
+			return -1;
+		spRegionAttachment_computeWorldVertices((spRegionAttachment *)attachment, slot, instance->world, 0, 2);
+		return 8;
+	}
+	if (attachment->type == SP_ATTACHMENT_MESH) {
+		spVertexAttachment *mesh = (spVertexAttachment *)attachment;
+		if (!ensure_world(instance, (size_t)mesh->worldVerticesLength))
+			return -1;
+		spVertexAttachment_computeWorldVertices(mesh, slot, 0, mesh->worldVerticesLength, instance->world, 0, 2);
+		return mesh->worldVerticesLength;
+	}
+	return 0;
+}
+
+/* spine-ts 4.1 Skeleton.getBounds: every region and mesh on an active bone. */
+static bool skeleton_bounds(struct spine_instance *instance, float *min_x, float *min_y, float *max_x, float *max_y)
+{
+	spSkeleton *skeleton = instance->skeleton;
+	bool found = false;
+	for (int index = 0; index < skeleton->slotsCount; index++) {
+		spSlot *slot = skeleton->drawOrder[index];
+		if (!slot->bone->active || !slot->attachment)
+			continue;
+		const int count = attachment_world_vertices(instance, slot, slot->attachment);
+		for (int i = 0; i + 1 < count; i += 2) {
+			const float x = instance->world[i], y = instance->world[i + 1];
+			if (!found) {
+				*min_x = *max_x = x;
+				*min_y = *max_y = y;
+				found = true;
+			}
+			*min_x = x < *min_x ? x : *min_x;
+			*min_y = y < *min_y ? y : *min_y;
+			*max_x = x > *max_x ? x : *max_x;
+			*max_y = y > *max_y ? y : *max_y;
+		}
+	}
+	return found;
+}
+
+static bool is_finite(float value)
+{
+	return value == value && value - value == 0.0f;
+}
+
+/* SpinePlayer.calculateAnimationViewport: setup pose once, then 100 samples. */
+static bool animation_bounds(struct spine_instance *instance, const char *name, struct spine_bounds *out)
+{
+	if (!instance || !out)
+		return false;
+	spAnimation *animation = find_animation(instance->asset->skeleton_data, name);
+	if (!animation)
+		return false;
+
+	spSkeleton *skeleton = instance->skeleton;
+	const int steps = 100;
+	const float step = animation->duration > 0.0f ? animation->duration / (float)steps : 0.0f;
+	float min_x = 0, min_y = 0, max_x = 0, max_y = 0;
+	bool found = false;
+	spSkeleton_setToSetupPose(skeleton);
+	float time = 0.0f;
+	for (int sample = 0; sample < steps; sample++, time += step) {
+		spAnimation_apply(animation, skeleton, time, time, 0, NULL, NULL, 1.0f, SP_MIX_BLEND_SETUP,
+				  SP_MIX_DIRECTION_IN);
+		spSkeleton_updateWorldTransform(skeleton);
+		float x0, y0, x1, y1;
+		if (!skeleton_bounds(instance, &x0, &y0, &x1, &y1) || !is_finite(x0) || !is_finite(y0) ||
+		    !is_finite(x1) || !is_finite(y1))
+			continue;
+		if (!found) {
+			min_x = x0, min_y = y0, max_x = x1, max_y = y1;
+			found = true;
+		}
+		min_x = x0 < min_x ? x0 : min_x;
+		min_y = y0 < min_y ? y0 : min_y;
+		max_x = x1 > max_x ? x1 : max_x;
+		max_y = y1 > max_y ? y1 : max_y;
+	}
+
+	/* Put the instance back in the pose its animation state describes. */
+	spSkeleton_setToSetupPose(skeleton);
+	spAnimationState_apply(instance->state, skeleton);
+	spSkeleton_updateWorldTransform(skeleton);
+
+	if (!found)
+		return false;
+	out->x = min_x;
+	out->y = min_y;
+	out->width = max_x - min_x;
+	out->height = max_y - min_y;
+	return true;
+}
+
+static uint8_t unit_to_byte(float value)
+{
+	if (!(value > 0.0f))
+		return 0;
+	if (value >= 1.0f)
+		return 255;
+	return (uint8_t)(value * 255.0f + 0.5f);
+}
+
+static enum spine_blend blend_of(spBlendMode mode)
+{
+	switch (mode) {
+	case SP_BLEND_MODE_ADDITIVE:
+		return SPINE_BLEND_ADDITIVE;
+	case SP_BLEND_MODE_MULTIPLY:
+		return SPINE_BLEND_MULTIPLY;
+	case SP_BLEND_MODE_SCREEN:
+		return SPINE_BLEND_SCREEN;
+	default:
+		return SPINE_BLEND_NORMAL;
+	}
+}
+
+/* Mirrors spine-ts 4.1 SkeletonRenderer with premultipliedAlpha and two-colour tint. */
 static bool build_draw_list(struct spine_instance *instance, struct spine_draw_list *list)
 {
-	(void)instance;
-	(void)list;
-	return false;
+	if (!instance || !list)
+		return false;
+	spine_draw_list_clear(list);
+	spSkeleton *skeleton = instance->skeleton;
+	spSkeletonClipping *clipper = instance->clipper;
+	static unsigned short quad[6] = {0, 1, 2, 2, 3, 0};
+	if (skeleton->color.a == 0.0f)
+		return true;
+
+	for (int index = 0; index < skeleton->slotsCount; index++) {
+		spSlot *slot = skeleton->drawOrder[index];
+		spAttachment *attachment = slot->attachment;
+		if (!attachment || !slot->bone->active) {
+			spSkeletonClipping_clipEnd(clipper, slot);
+			continue;
+		}
+		if (attachment->type == SP_ATTACHMENT_CLIPPING) {
+			spSkeletonClipping_clipStart(clipper, slot, (spClippingAttachment *)attachment);
+			continue;
+		}
+
+		spColor *attachment_color;
+		float *uvs;
+		unsigned short *triangles;
+		int triangle_count;
+		spAtlasRegion *region;
+		if (attachment->type == SP_ATTACHMENT_REGION) {
+			spRegionAttachment *region_attachment = (spRegionAttachment *)attachment;
+			attachment_color = &region_attachment->color;
+			uvs = region_attachment->uvs;
+			triangles = quad;
+			triangle_count = 6;
+			region = region_attachment->rendererObject;
+		} else if (attachment->type == SP_ATTACHMENT_MESH) {
+			spMeshAttachment *mesh = (spMeshAttachment *)attachment;
+			attachment_color = &mesh->color;
+			uvs = mesh->uvs;
+			triangles = mesh->triangles;
+			triangle_count = mesh->trianglesCount;
+			region = mesh->rendererObject;
+		} else {
+			spSkeletonClipping_clipEnd(clipper, slot);
+			continue;
+		}
+
+		const float alpha = skeleton->color.a * slot->color.a * attachment_color->a;
+		const uintptr_t page_tag = region && region->page ? (uintptr_t)region->page->rendererObject : 0;
+		if (slot->color.a == 0.0f || attachment_color->a == 0.0f || alpha == 0.0f || !page_tag) {
+			spSkeletonClipping_clipEnd(clipper, slot);
+			continue;
+		}
+
+		const int world_floats = attachment_world_vertices(instance, slot, attachment);
+		if (world_floats < 0)
+			return false;
+		float *vertices = instance->world;
+		int vertex_count = world_floats / 2;
+		if (spSkeletonClipping_isClipping(clipper)) {
+			spSkeletonClipping_clipTriangles(clipper, vertices, world_floats, triangles, triangle_count, uvs, 2);
+			vertices = clipper->clippedVertices->items;
+			vertex_count = clipper->clippedVertices->size / 2;
+			uvs = clipper->clippedUVs->items;
+			triangles = clipper->clippedTriangles->items;
+			triangle_count = clipper->clippedTriangles->size;
+		}
+		if (triangle_count <= 0 || vertex_count <= 0) {
+			spSkeletonClipping_clipEnd(clipper, slot);
+			continue;
+		}
+		if (!spine_draw_list_reserve(list, (size_t)vertex_count, (size_t)triangle_count, 1))
+			return false;
+
+		/* Colours: premultiplied light; dark is premultiplied with alpha 1, or black. */
+		const float r = skeleton->color.r * slot->color.r * attachment_color->r * alpha;
+		const float g = skeleton->color.g * slot->color.g * attachment_color->g * alpha;
+		const float b = skeleton->color.b * slot->color.b * attachment_color->b * alpha;
+		const uint32_t light = (uint32_t)unit_to_byte(r) | (uint32_t)unit_to_byte(g) << 8 |
+				       (uint32_t)unit_to_byte(b) << 16 | (uint32_t)unit_to_byte(alpha) << 24;
+		float dark[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+		if (slot->darkColor) {
+			dark[0] = slot->darkColor->r * alpha;
+			dark[1] = slot->darkColor->g * alpha;
+			dark[2] = slot->darkColor->b * alpha;
+		}
+
+		const uint32_t page = (uint32_t)(page_tag - 1);
+		const enum spine_blend blend = blend_of(slot->data->blendMode);
+		struct spine_draw_batch *batch = list->batch_count ? &list->batches[list->batch_count - 1] : NULL;
+		if (!batch || batch->page != page || batch->blend != blend) {
+			batch = &list->batches[list->batch_count++];
+			batch->page = page;
+			batch->blend = blend;
+			batch->first_index = (uint32_t)list->index_count;
+			batch->index_count = 0;
+		}
+
+		const uint32_t base = (uint32_t)list->vertex_count;
+		for (int i = 0; i < vertex_count; i++) {
+			struct spine_draw_vertex *vertex = &list->vertices[list->vertex_count++];
+			vertex->x = vertices[i * 2];
+			vertex->y = vertices[i * 2 + 1];
+			vertex->u = uvs[i * 2];
+			vertex->v = uvs[i * 2 + 1];
+			vertex->light = light;
+			memcpy(vertex->dark, dark, sizeof(dark));
+		}
+		for (int i = 0; i < triangle_count; i++)
+			list->indices[list->index_count++] = base + triangles[i];
+		batch->index_count += (uint32_t)triangle_count;
+
+		spSkeletonClipping_clipEnd(clipper, slot);
+	}
+	spSkeletonClipping_clipEnd2(clipper);
+	return true;
 }
 
 static const struct spine_backend backend = {

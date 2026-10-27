@@ -2,6 +2,7 @@
 #include "atlas-image.h"
 #include "draw-list.h"
 #include "test-check.h"
+#include "spine41/reference.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -302,6 +303,157 @@ static void test_concurrent_loads(void)
 			backend->free_asset(results[i]);
 }
 
+static struct spine_asset *load_spineboy(void)
+{
+	char error[512] = "";
+	struct spine_asset *asset = load(FIXTURE("spineboy-pro.skel"), FIXTURE("spineboy-pma.atlas"), error, sizeof(error));
+	if (!asset)
+		fprintf(stderr, "load error: %s\n", error);
+	return asset;
+}
+
+static void test_bounds_match_web_runtime(void)
+{
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (!asset)
+		return;
+	struct spine_instance *instance = backend->create_instance(asset);
+	struct spine_bounds bounds = {0};
+	CHECK(backend->animation_bounds(instance, "idle", &bounds));
+	CHECK_NEAR(bounds.x, REF_BOUNDS_IDLE[0], 1e-3);
+	CHECK_NEAR(bounds.y, REF_BOUNDS_IDLE[1], 1e-3);
+	CHECK_NEAR(bounds.width, REF_BOUNDS_IDLE[2], 1e-3);
+	CHECK_NEAR(bounds.height, REF_BOUNDS_IDLE[3], 1e-3);
+	CHECK(backend->animation_bounds(instance, "walk", &bounds));
+	CHECK_NEAR(bounds.x, REF_BOUNDS_WALK[0], 1e-3);
+	CHECK_NEAR(bounds.y, REF_BOUNDS_WALK[1], 1e-3);
+	CHECK_NEAR(bounds.width, REF_BOUNDS_WALK[2], 1e-3);
+	CHECK_NEAR(bounds.height, REF_BOUNDS_WALK[3], 1e-3);
+	CHECK(!backend->animation_bounds(instance, "nope", &bounds));
+	backend->free_instance(instance);
+	backend->free_asset(asset);
+}
+
+static void test_draw_list_matches_web_runtime(void)
+{
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (!asset)
+		return;
+	struct spine_instance *instance = backend->create_instance(asset);
+	struct spine_draw_list list = {0};
+	CHECK(backend->set_animation(instance, 0, "walk", true));
+	backend->update(instance, 0.25f);
+	CHECK(backend->build_draw_list(instance, &list));
+	CHECK(list.vertex_count == REF_WALK_VERTEX_COUNT);
+	if (list.vertex_count == REF_WALK_VERTEX_COUNT) {
+		int mismatches = 0;
+		size_t start = 0;
+		for (int block = 0; block < REF_WALK_BLOCK_COUNT; block++) {
+			const size_t size = (size_t)REF_WALK_BLOCKS[block];
+			/* spine-c and spine-ts number a region quad's corners from different starting corners. */
+			const size_t rotations = size == 4 ? 4 : 1;
+			bool matched = false;
+			for (size_t rotation = 0; rotation < rotations && !matched; rotation++) {
+				matched = true;
+				for (size_t i = 0; i < size && matched; i++) {
+					const struct spine_draw_vertex *vertex = &list.vertices[start + (i + rotation) % size];
+					matched = fabs(vertex->x - REF_WALK_VERTICES[(start + i) * 2]) <= 1e-3 &&
+						  fabs(vertex->y - REF_WALK_VERTICES[(start + i) * 2 + 1]) <= 1e-3;
+				}
+			}
+			if (!matched) {
+				if (!mismatches)
+					fprintf(stderr, "attachment block %d (vertices %zu..%zu) differs from the web runtime\n",
+						block, start, start + size - 1);
+				mismatches++;
+			}
+			start += size;
+		}
+		CHECK(start == list.vertex_count);
+		CHECK(mismatches == 0);
+	}
+	spine_draw_list_free(&list);
+	backend->free_instance(instance);
+	backend->free_asset(asset);
+}
+
+static void test_draw_list_well_formed(void)
+{
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (!asset)
+		return;
+	struct spine_instance *instance = backend->create_instance(asset);
+	struct spine_draw_list list = {0};
+	backend->set_animation(instance, 0, "walk", true);
+	backend->update(instance, 0.25f);
+	CHECK(backend->build_draw_list(instance, &list));
+	CHECK(list.batch_count >= 1);
+	size_t next_index = 0;
+	for (size_t b = 0; b < list.batch_count; b++) {
+		CHECK(list.batches[b].first_index == next_index);
+		CHECK(list.batches[b].index_count > 0 && list.batches[b].index_count % 3 == 0);
+		CHECK(list.batches[b].page < backend->page_count(asset));
+		next_index += list.batches[b].index_count;
+	}
+	CHECK(next_index == list.index_count);
+	for (size_t i = 0; i < list.index_count; i++)
+		CHECK(list.indices[i] < list.vertex_count);
+	/* Spineboy's body is opaque white: light = premultiplied (1,1,1,1), no dark colour. */
+	CHECK(list.vertex_count > 0 && list.vertices[0].light == 0xFFFFFFFFu);
+	CHECK(list.vertex_count > 0 && list.vertices[0].dark[0] == 0.0f && list.vertices[0].dark[3] == 1.0f);
+	for (size_t i = 0; i < list.vertex_count; i++)
+		CHECK(list.vertices[i].u >= 0.0f && list.vertices[i].u <= 1.0f && list.vertices[i].v >= 0.0f &&
+		      list.vertices[i].v <= 1.0f);
+	spine_draw_list_free(&list);
+	backend->free_instance(instance);
+	backend->free_asset(asset);
+}
+
+static void test_draw_list_reuse(void)
+{
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (!asset)
+		return;
+	struct spine_instance *instance = backend->create_instance(asset);
+	struct spine_draw_list list = {0};
+	CHECK(backend->build_draw_list(instance, &list));
+	const size_t vertices = list.vertex_count, indices = list.index_count, capacity = list.vertex_capacity;
+	CHECK(backend->build_draw_list(instance, &list));
+	CHECK(list.vertex_count == vertices && list.index_count == indices && list.vertex_capacity == capacity);
+	spine_draw_list_free(&list);
+	backend->free_instance(instance);
+	backend->free_asset(asset);
+}
+
+static void test_empty_skeleton(void)
+{
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/backend41-empty.json", TEST_OUTPUT_DIR);
+	const char *json = "{\"skeleton\":{\"spine\":\"4.1.17\"},\"bones\":[{\"name\":\"root\"}]}";
+	CHECK(write_all(path, json, strlen(json)));
+	char error[512] = "";
+	struct spine_asset *asset = load(path, FIXTURE("spineboy-pma.atlas"), error, sizeof(error));
+	CHECK(asset != NULL);
+	if (!asset) {
+		fprintf(stderr, "empty load error: %s\n", error);
+		return;
+	}
+	CHECK(backend->animation_count(asset) == 0);
+	struct spine_instance *instance = backend->create_instance(asset);
+	struct spine_bounds bounds = {0};
+	CHECK(!backend->animation_bounds(instance, "idle", &bounds));
+	struct spine_draw_list list = {0};
+	CHECK(backend->build_draw_list(instance, &list));
+	CHECK(list.batch_count == 0 && list.vertex_count == 0);
+	spine_draw_list_free(&list);
+	backend->free_instance(instance);
+	backend->free_asset(asset);
+}
+
 int main(void)
 {
 	backend = spine_backend_41();
@@ -320,5 +472,10 @@ int main(void)
 	test_utf8_path();
 	test_set_animation();
 	test_concurrent_loads();
+	test_bounds_match_web_runtime();
+	test_draw_list_matches_web_runtime();
+	test_draw_list_well_formed();
+	test_draw_list_reuse();
+	test_empty_skeleton();
 	return TEST_RESULT();
 }

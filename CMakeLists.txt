@@ -104,7 +104,7 @@ target_compile_definitions(skeleton-version-tests PRIVATE TEST_FIXTURE_DIR="${CM
 add_test(NAME skeleton-version-tests COMMAND skeleton-version-tests)
 
 add_executable(backend-41-tests tests/backend-41-test.c src/native/atlas-image.c src/native/draw-list.c src/skeleton-binary.c)
-target_include_directories(backend-41-tests PRIVATE src/native tests)
+target_include_directories(backend-41-tests PRIVATE src/native tests tests/fixtures)
 target_link_libraries(backend-41-tests PRIVATE spine-backend-41)
 target_compile_features(backend-41-tests PRIVATE c_std_11)
 target_compile_definitions(
