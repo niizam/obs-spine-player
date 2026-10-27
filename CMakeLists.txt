@@ -35,6 +35,7 @@ target_sources(
     src/native/skeleton-version.c
     src/native/skeleton-version.h
 )
+target_include_directories(obs-spine-player PRIVATE src src/native)
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
 if(WIN32)
   target_link_libraries(obs-spine-player PRIVATE user32)
