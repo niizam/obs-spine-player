@@ -11,7 +11,7 @@ OBS hotkeys ───────> emotion/action command ───┘
 Desktop cursor ────> normalized x/y ─────────────> SpineEyeTracker ────────> eye bones
 ```
 
-This boundary keeps OBS-specific lifetime and audio threading out of the player, while keeping Spine runtime objects out of native code.
+This boundary keeps OBS-specific lifetime and audio threading out of the player, while keeping Spine runtime objects out of native code. The optional native renderer (below) replaces the browser for Spine 4.1 skeletons.
 
 ## Components
 
@@ -31,6 +31,27 @@ This boundary keeps OBS-specific lifetime and audio threading out of the player,
 - `data/player/player-options.js` builds runtime options and supplies the default animation during construction. Spine Player uses that animation to calculate its initial viewport; applying or resetting it inside the success callback can produce a loaded but invisible character.
 - `data/player/player.js` loads assets, creates/disposes the matching Spine player, and adapts browser events to the state controller.
 - `data/player/asset-url.js` maps native file paths to OBS Browser's `http://absolute/` local-file scheme. Do not use `file://` URLs here: the player page has an `http://absolute` origin, so Chromium rejects direct `file://` fetches as cross-origin requests.
+
+## Native renderer
+
+With **Renderer: Native**, `spine-source.c` creates no browser source. Instead it owns a `native_renderer` (`src/native/native-renderer.c`). Design: [stage 1 spec](superpowers/specs/2026-10-27-native-renderer-41-design.md).
+
+- **Version backends.** `src/native/spine-backend.h` is a version-neutral interface (load, animate, bounds, draw lists). `backend-41.c` implements it on the vendored spine-c 4.1 (`third_party/spine-c-4.1`).
+  - Each Spine version family is compiled with a generated forced-include header (`src/native/spine41-prefix.h`, from `tools/generate-spine-prefix.js`) that renames every external symbol (`sp41_*`). Several runtimes can therefore share the one plugin module.
+  - The `spine41-prefix-check` test fails if a symbol escapes the prefix.
+- **Threads.**
+  - Loading happens on a per-source background thread, and only the latest request is kept.
+  - GPU resources, the skeleton instance and drawing live on the OBS graphics thread.
+  - Switching between Browser and Native happens on the UI thread under `renderer_mutex`.
+  - A load that needs another Spine version queues a fallback to Browser on the UI thread.
+- **Drawing.** It mirrors the spine-ts 4.1 renderer: premultiplied two-colour tint (`data/effects/spine.effect`), spine-ts blend factors, and clipping.
+  - The skeleton is drawn into an offscreen texture with gamma-space blending, as in WebGL.
+  - That texture is composited exactly like obs-browser: sRGB decode, `ONE, INVSRCALPHA`.
+  - Framing copies the web player: 100 animation samples, 10 % padding, contain-fit.
+- **Anti-aliasing.** libobs has no MSAA (render targets are single-sample) and never builds mipmaps.
+  - Atlas pages are resized to power-of-two sizes and given a CPU-built premultiplied mip chain (`atlas-image.c`), then sampled with 16× anisotropic filtering.
+  - CPU copies are freed after upload.
+- **OBS allocator rules.** spine-c's allocations go through `bmalloc`. Zero-byte requests are rounded up because OBS treats them as fatal, and the runtime's shared statics are freed in `obs_module_unload`.
 
 ## Animation model
 

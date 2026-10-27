@@ -9,7 +9,7 @@ No speech recognition, network service, or external audio process is used.
 - Bundled Spine Web Player 4.0.28 and 4.1.20 runtimes and the spine-ts 3.7.94 WebGL runtime, with automatic asset-version detection.
 - Spine 3.7 `.skel` support through a port of the official 3.7 binary reader (spine-ts 3.7 itself only reads JSON).
 - Automatic animation catalogs: animation names are read directly from JSON and from Spine 3.7/4.0/4.1 binary skeletons.
-- Native OBS source properties and transparent rendering through the installed OBS Browser plugin.
+- Native OBS source properties and transparent rendering through the installed OBS Browser plugin, or an optional native renderer (Spine 4.1) with no browser at all.
 - Lightweight microphone gate with configurable threshold, attack, and release hold.
 - Independent mouth overlay on Spine track 1, leaving `idle` or the selected emotion on track 0. Rigs without a dedicated `talk_start` animation, such as CounterSide illustrations, get a mouth-only loop derived from their own talking clip.
 - Optional desktop-cursor eye tracking with configurable Spine slot groups, travel, and smoothing.
@@ -46,6 +46,17 @@ GitHub Actions builds Linux x86_64 and Windows x64 packages on pushes to `main`,
 4. Enable yap mode, choose an existing OBS microphone/audio input, and tune the threshold. The selected source must be active in OBS to produce audio callbacks.
 5. Choose default, mouth, and emotion/action animations from the detected dropdowns. Disable **Loop** for actions that should return to `idle` after one play.
 6. Open **Settings → Hotkeys**, search for “Spine Player,” and bind the desired source hotkeys.
+
+## Renderer: Browser or Native
+
+**Renderer** chooses how the character is drawn:
+
+- **Browser (compatible)**, the default, renders through a hidden OBS Browser Source and supports every feature.
+- **Native (faster, Spine 4.1 only for now)** draws the skeleton directly with OBS graphics using the official spine-c runtime. There is no browser process.
+  - In a first measurement it used roughly a third of the Browser renderer's CPU and GPU ([numbers](docs/performance.md)).
+  - Atlas textures are mipmapped and sampled with trilinear/anisotropic filtering, so edges stay smooth when a large atlas is drawn small.
+
+Native mode currently plays the default animation only. Yap mode, eye tracking, and emotions/hotkeys still require Browser. Skeletons that are not Spine 4.1, or a forced runtime other than 4.1, switch back to Browser automatically, and the OBS log says why.
 
 ## Cursor eye tracking
 
