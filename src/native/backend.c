@@ -607,7 +607,7 @@ static bool animation_bounds(struct spine_instance *instance, const char *name, 
 		spAnimation_apply(animation, skeleton, time, time, 0, NULL, NULL, 1.0f, SP_MIX_BLEND_SETUP,
 				  SP_MIX_DIRECTION_IN);
 		spSkeleton_updateWorldTransform(skeleton);
-		float x0, y0, x1, y1;
+		float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 		if (!skeleton_bounds(instance, &x0, &y0, &x1, &y1) || !is_finite(x0) || !is_finite(y0) ||
 		    !is_finite(x1) || !is_finite(y1))
 			continue;
