@@ -97,11 +97,36 @@ char *_spUtil_readFile(const char *path, int *length)
 
 /* ---- allocator ---- */
 
+/* spine-c allocates zero bytes for empty arrays; OBS's bmalloc/brealloc treat
+ * that as a fatal bug, so requests are rounded up to one byte here. */
+static struct spine_allocator host_allocator; /* all NULL: the C library allocator */
+
+static void *host_alloc(size_t size)
+{
+	size = size ? size : 1;
+	return host_allocator.alloc ? host_allocator.alloc(size) : malloc(size);
+}
+
+static void *host_realloc(void *pointer, size_t size)
+{
+	size = size ? size : 1;
+	return host_allocator.realloc ? host_allocator.realloc(pointer, size) : realloc(pointer, size);
+}
+
+static void host_free(void *pointer)
+{
+	if (host_allocator.free)
+		host_allocator.free(pointer);
+	else
+		free(pointer);
+}
+
 static void set_allocator(const struct spine_allocator *allocator)
 {
-	_spSetMalloc(allocator ? allocator->alloc : malloc);
-	_spSetRealloc(allocator ? allocator->realloc : realloc);
-	_spSetFree(allocator ? allocator->free : free);
+	host_allocator = allocator ? *allocator : (struct spine_allocator){0};
+	_spSetMalloc(host_alloc);
+	_spSetRealloc(host_realloc);
+	_spSetFree(host_free);
 }
 
 /* ---- loading ---- */

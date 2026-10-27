@@ -487,6 +487,52 @@ static void test_release_page_images(void)
 	backend->free_asset(asset);
 }
 
+/* OBS's bmalloc/brealloc crash on zero-byte requests; the backend must never make one. */
+static int zero_size_requests = 0;
+
+static void *strict_alloc(size_t size)
+{
+	if (!size)
+		zero_size_requests++;
+	return malloc(size ? size : 1);
+}
+
+static void *strict_realloc(void *pointer, size_t size)
+{
+	if (!size)
+		zero_size_requests++;
+	return realloc(pointer, size ? size : 1);
+}
+
+static void test_no_zero_size_allocations(void)
+{
+	static const struct spine_allocator strict = {strict_alloc, strict_realloc, free};
+	backend->set_allocator(&strict);
+	zero_size_requests = 0;
+	struct spine_asset *skel = load_spineboy();
+	char error[512] = "";
+	struct spine_asset *json = load(FIXTURE("spineboy-pro.json"), FIXTURE("spineboy-pma.atlas"), error, sizeof(error));
+	CHECK(skel != NULL && json != NULL);
+	if (skel) {
+		struct spine_instance *instance = backend->create_instance(skel);
+		struct spine_draw_list list = {0};
+		backend->set_animation(instance, 0, "walk", true);
+		backend->update(instance, 0.25f);
+		struct spine_bounds bounds;
+		backend->animation_bounds(instance, "walk", &bounds);
+		backend->build_draw_list(instance, &list);
+		spine_draw_list_free(&list);
+		backend->free_instance(instance);
+		backend->free_asset(skel);
+	}
+	if (json)
+		backend->free_asset(json);
+	CHECK(zero_size_requests == 0);
+	if (zero_size_requests)
+		fprintf(stderr, "%d zero-size allocation request(s) reached the host allocator\n", zero_size_requests);
+	backend->set_allocator(NULL);
+}
+
 int main(void)
 {
 	backend = spine_backend_41();
@@ -512,5 +558,6 @@ int main(void)
 	test_empty_skeleton();
 	test_non_json_extension_reads_binary();
 	test_release_page_images();
+	test_no_zero_size_allocations();
 	return TEST_RESULT();
 }
