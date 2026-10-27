@@ -56,6 +56,26 @@ Same machine and portable OBS (30 fps). MekamiShifty is in `idle` at 540x960, wi
 - FXAA and 2x were also checked under OBS's OpenGL renderer, which Linux and macOS use. Both render correctly with no shader errors.
 
 **Visual comparison,** using zoomed crops of a still region:
-- FXAA softens edges slightly.
+- FXAA softens edges slightly. (Since 0.3.1 it only touches the outline; see below.)
 - 1.5x and 2x give visibly sharper detail with smooth outlines, because the atlas is sampled at a higher mip level before the area downscale.
 - No halos in any mode.
+
+## 2026-10-27: FXAA on the outline only (0.3.1)
+
+0.3.0's FXAA found edges from colour, so it also treated the artwork's line art as aliasing. The fix finds edges from coverage (alpha) only.
+
+**Method:**
+- Full-resolution screenshots: Mekami at 1080x1920 and Curian at 1440x1440.
+- The character was frozen by hiding its scene item. Two Off screenshots were identical.
+- Inside means fully opaque pixels at least 2 px from transparency. Outline means the remaining visible pixels.
+- Sharpness is the mean absolute Laplacian of luma.
+
+| FXAA version | Character | Sharpness inside vs Off | Pixels changed inside | Outline pixels changed |
+| --- | --- | --- | --- | --- |
+| 0.3.0 + contrast check | Mekami | −28.6 % | 23.5 % | 22.8 % |
+| 0.3.0 + contrast check | Curian | −31.1 % | 28.4 % | 28.6 % |
+| coverage only (0.3.1) | Mekami | 0.0 % | 0.0 % | 10.2 % |
+| coverage only (0.3.1) | Curian | 0.0 % | 0.0 % | 12.6 % |
+
+0.3.0 itself (no contrast check) blurred even more: it filtered every pixel.
+

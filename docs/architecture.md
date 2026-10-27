@@ -57,6 +57,7 @@ Versions before stage 5 of the native rewrite drew through a hidden OBS Browser 
 - **Anti-aliasing.** libobs has no MSAA (render targets are single-sample) and never builds mipmaps.
   - Atlas pages are resized to power-of-two sizes and given a CPU-built premultiplied mip chain (`atlas-image.c`). They are sampled with 16× anisotropic filtering, and the CPU copies are freed after upload.
   - FXAA (`data/effects/spine-fxaa.effect`) and 1.5×/2× supersampling with an area downscale are optional.
+  - FXAA finds edges from coverage (alpha) only, so it smooths the outline where mesh edges meet transparency. Colour-based edge detection also treated the artwork's line art as aliasing: it blurred about a quarter of the pixels inside the character and cut fine-detail sharpness by about 30 %.
 - **Controls.** Three version-neutral modules reach the skeleton only through callbacks and the backend's read-only `spine_skeleton_desc`:
   - `src/native/state-machine.c` handles emotions, one-shot actions and reset on track 0, and the mouth on track 1;
   - `src/native/mouth-plan.c` decides what yap mode plays;

@@ -1,7 +1,11 @@
 // FXAA (Lottes' classic single-pass version) for the native Spine renderer's
-// offscreen texture. The texture holds premultiplied RGBA over transparency, so
-// luma includes coverage (colour as seen over 50% grey) and all four channels
-// are filtered together, which keeps premultiplication intact (no halos).
+// offscreen texture, which holds premultiplied RGBA over transparency.
+//
+// Edges are found from coverage (alpha) only, so FXAA smooths the character's
+// outline, where mesh edges meet transparency, and leaves everything inside the
+// character exactly as drawn. Detecting edges from colour would also treat the
+// artwork's line art as aliasing and blur it. All four channels are filtered
+// together, which keeps premultiplication intact (no halos).
 
 uniform float4x4 ViewProj;
 uniform texture2d image;
@@ -26,29 +30,29 @@ VertData VSDefault(VertData vert_in)
 	return vert_out;
 }
 
-float coverage_luma(float4 c)
-{
-	return sqrt(dot(c.rgb, float3(0.299, 0.587, 0.114)) + 0.5 * (1.0 - c.a));
-}
-
 float4 PSFXAA(VertData vert_in) : TARGET
 {
 	float2 uv = vert_in.uv;
 	float4 centre = image.Sample(fxaa_sampler, uv);
-	float luma_nw = coverage_luma(image.Sample(fxaa_sampler, uv + float2(-1.0, -1.0) * texel));
-	float luma_ne = coverage_luma(image.Sample(fxaa_sampler, uv + float2(1.0, -1.0) * texel));
-	float luma_sw = coverage_luma(image.Sample(fxaa_sampler, uv + float2(-1.0, 1.0) * texel));
-	float luma_se = coverage_luma(image.Sample(fxaa_sampler, uv + float2(1.0, 1.0) * texel));
-	float luma_m = coverage_luma(centre);
+	float a_nw = image.Sample(fxaa_sampler, uv + float2(-1.0, -1.0) * texel).a;
+	float a_ne = image.Sample(fxaa_sampler, uv + float2(1.0, -1.0) * texel).a;
+	float a_sw = image.Sample(fxaa_sampler, uv + float2(-1.0, 1.0) * texel).a;
+	float a_se = image.Sample(fxaa_sampler, uv + float2(1.0, 1.0) * texel).a;
+	float a_m = centre.a;
 
-	float luma_min = min(luma_m, min(min(luma_nw, luma_ne), min(luma_sw, luma_se)));
-	float luma_max = max(luma_m, max(max(luma_nw, luma_ne), max(luma_sw, luma_se)));
+	float a_min = min(a_m, min(min(a_nw, a_ne), min(a_sw, a_se)));
+	float a_max = max(a_m, max(max(a_nw, a_ne), max(a_sw, a_se)));
+
+	// Only filter real outline edges (Lottes' FXAA 3.11 console thresholds:
+	// 0.125 of the largest neighbour, at least 0.05).
+	if (a_max - a_min < max(0.05, a_max * 0.125))
+		return centre;
 
 	float2 dir;
-	dir.x = -((luma_nw + luma_ne) - (luma_sw + luma_se));
-	dir.y = ((luma_nw + luma_sw) - (luma_ne + luma_se));
+	dir.x = -((a_nw + a_ne) - (a_sw + a_se));
+	dir.y = ((a_nw + a_sw) - (a_ne + a_se));
 
-	float dir_reduce = max((luma_nw + luma_ne + luma_sw + luma_se) * (0.25 * 0.125), 1.0 / 128.0);
+	float dir_reduce = max((a_nw + a_ne + a_sw + a_se) * (0.25 * 0.125), 1.0 / 128.0);
 	float rcp_dir_min = 1.0 / (min(abs(dir.x), abs(dir.y)) + dir_reduce);
 	dir = clamp(dir * rcp_dir_min, float2(-8.0, -8.0), float2(8.0, 8.0)) * texel;
 
@@ -56,8 +60,7 @@ float4 PSFXAA(VertData vert_in) : TARGET
 			       image.Sample(fxaa_sampler, uv + dir * (2.0 / 3.0 - 0.5)));
 	float4 rgba_b = rgba_a * 0.5 + 0.25 * (image.Sample(fxaa_sampler, uv + dir * -0.5) +
 					       image.Sample(fxaa_sampler, uv + dir * 0.5));
-	float luma_b = coverage_luma(rgba_b);
-	if (luma_b < luma_min || luma_b > luma_max)
+	if (rgba_b.a < a_min || rgba_b.a > a_max)
 		return rgba_a;
 	return rgba_b;
 }

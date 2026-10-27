@@ -61,7 +61,7 @@ The character is drawn into an offscreen texture on OBS's graphics thread, then 
 **Anti-aliasing** sets how smooth edges are. The default is Off:
 
 - **Off:** mipmaps only.
-- **FXAA (light):** a cheap edge filter.
+- **FXAA (light):** a cheap filter that smooths the character's outline. Detail inside the character is left exactly as drawn.
 - **Supersample 1.5x / 2x:** draws the character at 2.25x or 4x the pixels, then area-downscales it. This is the smoothest and sharpest option, and the most GPU work. Keep Off on weak PCs.
 
 Skeletons exported by other Spine versions (for example 3.8 or 4.2) are not drawn. The OBS log says so: `Spine 4.2.10 is not supported; the plugin draws Spine 3.7, 4.0 and 4.1 exports`.
