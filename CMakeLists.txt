@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(obs-spine-player VERSION 0.2.0 LANGUAGES C)
+project(obs-spine-player VERSION 0.3.0 LANGUAGES C)
 
 include(GNUInstallDirs)
 
