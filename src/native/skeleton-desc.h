@@ -17,7 +17,7 @@ struct spine_desc_timeline {
 	enum spine_timeline_kind kind;
 	int target; /* slot or bone index; -1 otherwise */
 	int frame_count;
-	const float *frame_times;            /* time of key i */
+	const float *frame_times;            /* time of key i; attachment timelines only */
 	const char *const *attachment_names; /* attachment timelines only; entries may be NULL */
 };
 

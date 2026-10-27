@@ -22,6 +22,7 @@ struct spine_asset {
 	spAnimationStateData *state_data;
 	struct spine_page_image *pages;
 	size_t page_count;
+	struct description *description; /* built on first describe() */
 
 	/* Only valid while load() runs. */
 	const struct spine_image_decoder *decoder;
@@ -35,7 +36,34 @@ struct spine_instance {
 	spSkeletonClipping *clipper;
 	float *world;
 	size_t world_capacity;
+	/* Mouth overlays share their source's timelines; kept until the instance
+	 * is freed because the animation state may still be mixing out of them. */
+	spAnimation **overlays;
+	size_t overlay_count, overlay_capacity;
 };
+
+struct description {
+	struct spine_skeleton_desc desc;
+	struct spine_desc_slot *slots;
+	struct spine_desc_bone *bones;
+	struct spine_desc_animation *animations;
+	struct spine_desc_timeline *timelines;
+	float *times;
+	struct spine_desc_skin_attachment *skin_attachments;
+};
+
+static void free_description(struct description *description)
+{
+	if (!description)
+		return;
+	free(description->slots);
+	free(description->bones);
+	free(description->animations);
+	free(description->timelines);
+	free(description->times);
+	free(description->skin_attachments);
+	free(description);
+}
 
 static void set_error(char *error, size_t error_size, const char *format, ...)
 {
@@ -141,6 +169,7 @@ static void free_asset(struct spine_asset *asset)
 {
 	if (!asset)
 		return;
+	free_description(asset->description);
 	if (asset->state_data)
 		spAnimationStateData_dispose(asset->state_data);
 	if (asset->skeleton_data)
@@ -326,6 +355,15 @@ static const char *animation_name(const struct spine_asset *asset, size_t index)
 
 /* ---- instances and animation ---- */
 
+/* Frees an overlay's own memory only; its timelines belong to the source animation. */
+static void free_overlay(spAnimation *overlay)
+{
+	spPropertyIdArray_dispose(overlay->timelineIds);
+	spTimelineArray_dispose(overlay->timelines);
+	FREE(overlay->name);
+	FREE(overlay);
+}
+
 static void free_instance(struct spine_instance *instance)
 {
 	if (!instance)
@@ -334,6 +372,9 @@ static void free_instance(struct spine_instance *instance)
 		spSkeletonClipping_dispose(instance->clipper);
 	if (instance->state)
 		spAnimationState_dispose(instance->state);
+	for (size_t i = 0; i < instance->overlay_count; i++)
+		free_overlay(instance->overlays[i]);
+	free(instance->overlays);
 	if (instance->skeleton)
 		spSkeleton_dispose(instance->skeleton);
 	free(instance->world);
@@ -660,6 +701,256 @@ static bool build_draw_list(struct spine_instance *instance, struct spine_draw_l
 	return true;
 }
 
+/* ---- skeleton description ---- */
+
+static enum spine_timeline_kind timeline_target(const spTimeline *timeline, int *target)
+{
+	*target = -1;
+	switch (timeline->type) {
+	case SP_TIMELINE_ATTACHMENT:
+		*target = ((const spAttachmentTimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_ALPHA:
+		*target = ((const spAlphaTimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_RGBA:
+		*target = ((const spRGBATimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_RGB:
+		*target = ((const spRGBTimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_RGBA2:
+		*target = ((const spRGBA2Timeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_RGB2:
+		*target = ((const spRGB2Timeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_DEFORM:
+		*target = ((const spDeformTimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_SEQUENCE:
+		*target = ((const spSequenceTimeline *)timeline)->slotIndex;
+		return SPINE_TIMELINE_SLOT;
+	case SP_TIMELINE_ROTATE:
+		*target = ((const spRotateTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_TRANSLATE:
+		*target = ((const spTranslateTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_TRANSLATEX:
+		*target = ((const spTranslateXTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_TRANSLATEY:
+		*target = ((const spTranslateYTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_SCALE:
+		*target = ((const spScaleTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_SCALEX:
+		*target = ((const spScaleXTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_SCALEY:
+		*target = ((const spScaleYTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_SHEAR:
+		*target = ((const spShearTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_SHEARX:
+		*target = ((const spShearXTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_SHEARY:
+		*target = ((const spShearYTimeline *)timeline)->boneIndex;
+		return SPINE_TIMELINE_BONE;
+	case SP_TIMELINE_EVENT:
+		return SPINE_TIMELINE_EVENT;
+	default:
+		return SPINE_TIMELINE_OTHER;
+	}
+}
+
+static struct description *build_description(const spSkeletonData *data)
+{
+	struct description *description = calloc(1, sizeof(*description));
+	if (!description)
+		return NULL;
+	size_t timeline_total = 0, time_total = 0, skin_total = 0;
+	for (int a = 0; a < data->animationsCount; a++) {
+		const spTimelineArray *timelines = data->animations[a]->timelines;
+		timeline_total += (size_t)timelines->size;
+		for (int t = 0; t < timelines->size; t++)
+			if (timelines->items[t]->type == SP_TIMELINE_ATTACHMENT)
+				time_total += (size_t)timelines->items[t]->frameCount;
+	}
+	for (int s = 0; s < data->skinsCount; s++)
+		for (const spSkinEntry *entry = spSkin_getAttachments(data->skins[s]); entry; entry = entry->next)
+			skin_total++;
+
+	description->slots = calloc(data->slotsCount ? (size_t)data->slotsCount : 1, sizeof(*description->slots));
+	description->bones = calloc(data->bonesCount ? (size_t)data->bonesCount : 1, sizeof(*description->bones));
+	description->animations =
+		calloc(data->animationsCount ? (size_t)data->animationsCount : 1, sizeof(*description->animations));
+	description->timelines = calloc(timeline_total ? timeline_total : 1, sizeof(*description->timelines));
+	description->times = calloc(time_total ? time_total : 1, sizeof(*description->times));
+	description->skin_attachments = calloc(skin_total ? skin_total : 1, sizeof(*description->skin_attachments));
+	if (!description->slots || !description->bones || !description->animations || !description->timelines ||
+	    !description->times || !description->skin_attachments) {
+		free_description(description);
+		return NULL;
+	}
+
+	for (int i = 0; i < data->slotsCount; i++)
+		description->slots[i] = (struct spine_desc_slot){data->slots[i]->name, data->slots[i]->boneData->index};
+	for (int i = 0; i < data->bonesCount; i++)
+		description->bones[i] = (struct spine_desc_bone){
+			data->bones[i]->name, data->bones[i]->parent ? data->bones[i]->parent->index : -1};
+
+	size_t next_timeline = 0, next_time = 0;
+	for (int a = 0; a < data->animationsCount; a++) {
+		const spAnimation *animation = data->animations[a];
+		struct spine_desc_timeline *first = &description->timelines[next_timeline];
+		for (int t = 0; t < animation->timelines->size; t++) {
+			const spTimeline *timeline = animation->timelines->items[t];
+			struct spine_desc_timeline *out = &description->timelines[next_timeline++];
+			out->kind = timeline_target(timeline, &out->target);
+			out->frame_count = timeline->frameCount;
+			if (timeline->type == SP_TIMELINE_ATTACHMENT) {
+				float *times = &description->times[next_time];
+				for (int k = 0; k < timeline->frameCount; k++)
+					times[k] = timeline->frames->items[k * timeline->frameEntries];
+				next_time += (size_t)timeline->frameCount;
+				out->frame_times = times;
+				out->attachment_names =
+					(const char *const *)((const spAttachmentTimeline *)timeline)->attachmentNames;
+			}
+		}
+		description->animations[a] = (struct spine_desc_animation){animation->name, animation->duration,
+									   animation->timelines->size, first};
+	}
+
+	size_t next_skin = 0;
+	for (int s = 0; s < data->skinsCount; s++)
+		for (const spSkinEntry *entry = spSkin_getAttachments(data->skins[s]); entry; entry = entry->next)
+			description->skin_attachments[next_skin++] =
+				(struct spine_desc_skin_attachment){entry->slotIndex, entry->name};
+
+	description->desc = (struct spine_skeleton_desc){description->slots,
+							 (size_t)data->slotsCount,
+							 description->bones,
+							 (size_t)data->bonesCount,
+							 description->animations,
+							 (size_t)data->animationsCount,
+							 description->skin_attachments,
+							 skin_total};
+	return description;
+}
+
+static const struct spine_skeleton_desc *describe(struct spine_asset *asset)
+{
+	if (!asset)
+		return NULL;
+	if (!asset->description)
+		asset->description = build_description(asset->skeleton_data);
+	return asset->description ? &asset->description->desc : NULL;
+}
+
+/* ---- animation queue and mouth overlays ---- */
+
+static bool add_animation(struct spine_instance *instance, int track, const char *name, bool loop, float delay)
+{
+	if (!instance)
+		return false;
+	spAnimation *animation = find_animation(instance->asset->skeleton_data, name);
+	if (!animation)
+		return false;
+	spAnimationState_addAnimation(instance->state, track, animation, loop ? 1 : 0, delay);
+	return true;
+}
+
+static void set_empty_animation(struct spine_instance *instance, int track, float mix)
+{
+	if (instance)
+		spAnimationState_setEmptyAnimation(instance->state, track, mix);
+}
+
+static bool set_overlay(struct spine_instance *instance, int track, int source_animation, const int *timelines,
+			size_t count, float start, float end, bool loop)
+{
+	if (!instance || source_animation < 0 || source_animation >= instance->asset->skeleton_data->animationsCount ||
+	    !count || count > (size_t)INT32_MAX)
+		return false;
+	spAnimation *source = instance->asset->skeleton_data->animations[source_animation];
+	for (size_t i = 0; i < count; i++)
+		if (timelines[i] < 0 || timelines[i] >= source->timelines->size)
+			return false;
+	if (instance->overlay_count == instance->overlay_capacity) {
+		const size_t capacity = instance->overlay_capacity ? instance->overlay_capacity * 2 : 4;
+		spAnimation **grown = realloc(instance->overlays, capacity * sizeof(*grown));
+		if (!grown)
+			return false;
+		instance->overlays = grown;
+		instance->overlay_capacity = capacity;
+	}
+
+	spTimelineArray *shared = spTimelineArray_create((int)count);
+	for (size_t i = 0; i < count; i++)
+		spTimelineArray_add(shared, source->timelines->items[timelines[i]]);
+	char name[512];
+	snprintf(name, sizeof(name), "%s (mouth)", source->name);
+	spAnimation *overlay = spAnimation_create(name, shared, source->duration);
+	instance->overlays[instance->overlay_count++] = overlay;
+
+	spTrackEntry *entry = spAnimationState_setAnimation(instance->state, track, overlay, loop ? 1 : 0);
+	if (entry) {
+		entry->animationStart = start;
+		entry->animationEnd = end;
+	}
+	return true;
+}
+
+/* ---- bone access for eye tracking ---- */
+
+static spBone *bone_at(struct spine_instance *instance, int bone)
+{
+	if (!instance || bone < 0 || bone >= instance->skeleton->bonesCount)
+		return NULL;
+	return instance->skeleton->bones[bone];
+}
+
+static int find_slot_bone(struct spine_instance *instance, const char *slot_name)
+{
+	if (!instance || !slot_name)
+		return -1;
+	spSlot *slot = spSkeleton_findSlot(instance->skeleton, slot_name);
+	return slot ? slot->bone->data->index : -1;
+}
+
+static bool bone_parent_matrix(struct spine_instance *instance, int bone, float m[4])
+{
+	spBone *target = bone_at(instance, bone);
+	if (!target || !target->parent)
+		return false;
+	m[0] = target->parent->a;
+	m[1] = target->parent->b;
+	m[2] = target->parent->c;
+	m[3] = target->parent->d;
+	return true;
+}
+
+static void bone_translate(struct spine_instance *instance, int bone, float dx, float dy)
+{
+	spBone *target = bone_at(instance, bone);
+	if (target) {
+		target->x += dx;
+		target->y += dy;
+	}
+}
+
+static void update_world_transform(struct spine_instance *instance)
+{
+	if (instance)
+		spSkeleton_updateWorldTransform(instance->skeleton);
+}
+
 static const struct spine_backend backend = {
 	.name = "4.1",
 	.set_allocator = set_allocator,
@@ -677,6 +968,14 @@ static const struct spine_backend backend = {
 	.update = update,
 	.animation_bounds = animation_bounds,
 	.build_draw_list = build_draw_list,
+	.describe = describe,
+	.add_animation = add_animation,
+	.set_empty_animation = set_empty_animation,
+	.set_overlay = set_overlay,
+	.find_slot_bone = find_slot_bone,
+	.bone_parent_matrix = bone_parent_matrix,
+	.bone_translate = bone_translate,
+	.update_world_transform = update_world_transform,
 };
 
 const struct spine_backend *spine_backend_41(void)

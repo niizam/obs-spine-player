@@ -570,6 +570,16 @@ static void test_no_leaks_after_shutdown(void)
 		struct spine_instance *instance = backend->create_instance(asset);
 		backend->set_animation(instance, 0, "walk", true);
 		backend->update(instance, 0.25f);
+		CHECK(backend->describe && backend->set_overlay && backend->set_empty_animation);
+		if (backend->describe && backend->set_overlay && backend->set_empty_animation) {
+			CHECK(backend->describe(asset) != NULL);
+			const int timelines[2] = {0, 1};
+			backend->set_overlay(instance, 1, 0, timelines, 2, 0.0f, 0.5f, true);
+			backend->update(instance, 0.1f);
+			backend->set_overlay(instance, 1, 1, timelines, 1, 0.0f, 0.5f, true);
+			backend->set_empty_animation(instance, 1, 0.08f);
+			backend->update(instance, 0.1f);
+		}
 		backend->free_instance(instance);
 		backend->free_asset(asset);
 	}
@@ -621,6 +631,138 @@ static void test_crlf_atlas(void)
 	}
 }
 
+static int find_slot_index(const struct spine_skeleton_desc *desc, const char *name)
+{
+	for (size_t i = 0; i < desc->slot_count; i++)
+		if (strcmp(desc->slots[i].name, name) == 0)
+			return (int)i;
+	return -1;
+}
+
+static int find_animation_index(const struct spine_skeleton_desc *desc, const char *name)
+{
+	for (size_t i = 0; i < desc->animation_count; i++)
+		if (strcmp(desc->animations[i].name, name) == 0)
+			return (int)i;
+	return -1;
+}
+
+static void test_describe(void)
+{
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (!asset)
+		return;
+	const struct spine_skeleton_desc *desc = backend->describe(asset);
+	CHECK(desc != NULL);
+	CHECK(backend->describe(asset) == desc); /* cached */
+	CHECK(desc->slot_count == 52 && desc->bone_count == 67 && desc->animation_count == 11);
+	const int mouth = find_slot_index(desc, "mouth");
+	CHECK(mouth == 33);
+	if (mouth >= 0) {
+		const int head = desc->slots[mouth].bone;
+		CHECK(strcmp(desc->bones[head].name, "head") == 0);
+		CHECK(strcmp(desc->bones[desc->bones[head].parent].name, "neck") == 0);
+	}
+	CHECK(desc->bones[0].parent == -1);
+	bool smile = false;
+	for (size_t i = 0; i < desc->skin_attachment_count; i++)
+		smile = smile || (desc->skin_attachments[i].slot == mouth &&
+				  strcmp(desc->skin_attachments[i].name, "mouth-smile") == 0);
+	CHECK(smile);
+
+	const int run = find_animation_index(desc, "run");
+	CHECK(run >= 0);
+	if (run >= 0) {
+		const struct spine_desc_animation *animation = &desc->animations[run];
+		int slots = 0, bones = 0, events = 0;
+		bool mouth_keys = false;
+		for (int t = 0; t < animation->timeline_count; t++) {
+			const struct spine_desc_timeline *timeline = &animation->timelines[t];
+			slots += timeline->kind == SPINE_TIMELINE_SLOT;
+			bones += timeline->kind == SPINE_TIMELINE_BONE;
+			events += timeline->kind == SPINE_TIMELINE_EVENT;
+			if (timeline->kind == SPINE_TIMELINE_SLOT && timeline->target == mouth && timeline->attachment_names)
+				mouth_keys = timeline->frame_count > 0 && timeline->frame_times != NULL;
+		}
+		CHECK(slots >= 1 && bones >= 30 && events == 1);
+		CHECK(mouth_keys);
+	}
+	backend->free_asset(asset);
+}
+
+static void test_animation_queue_and_overlay(void)
+{
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (!asset)
+		return;
+	const struct spine_skeleton_desc *desc = backend->describe(asset);
+	struct spine_instance *instance = backend->create_instance(asset);
+	CHECK(backend->set_animation(instance, 0, "walk", true));
+	CHECK(backend->add_animation(instance, 0, "idle", true, 0.0f));
+	CHECK(!backend->add_animation(instance, 0, "nope", true, 0.0f));
+
+	const int run = find_animation_index(desc, "run");
+	int selected[8];
+	size_t count = 0;
+	for (int t = 0; t < desc->animations[run].timeline_count && count < 8; t++)
+		if (desc->animations[run].timelines[t].kind == SPINE_TIMELINE_SLOT)
+			selected[count++] = t;
+	CHECK(count >= 1);
+	CHECK(backend->set_overlay(instance, 1, run, selected, count, 0.1f, 0.5f, true));
+	backend->update(instance, 0.3f);
+	CHECK(backend->set_overlay(instance, 1, run, selected, count, 0.1f, 0.5f, true));
+	CHECK(backend->set_overlay(instance, 1, run, selected, count, 0.2f, 0.4f, true));
+	backend->update(instance, 0.3f);
+	backend->set_empty_animation(instance, 1, 0.08f);
+	backend->update(instance, 0.3f);
+	CHECK(!backend->set_overlay(instance, 1, 999, selected, count, 0, 1, true));
+	backend->free_instance(instance);
+	backend->free_asset(asset); /* shared timelines must be freed exactly once */
+}
+
+static double vertex_sum(const struct spine_draw_list *list)
+{
+	double sum = 0;
+	for (size_t i = 0; i < list->vertex_count; i++)
+		sum += list->vertices[i].x + list->vertices[i].y;
+	return sum;
+}
+
+static void test_bone_access(void)
+{
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (!asset)
+		return;
+	const struct spine_skeleton_desc *desc = backend->describe(asset);
+	struct spine_instance *instance = backend->create_instance(asset);
+	const int head = backend->find_slot_bone(instance, "mouth");
+	CHECK(head >= 0 && strcmp(desc->bones[head].name, "head") == 0);
+	CHECK(backend->find_slot_bone(instance, "nope") == -1);
+	float m[4];
+	CHECK(backend->bone_parent_matrix(instance, head, m));
+	CHECK(!backend->bone_parent_matrix(instance, 0, m));
+
+	struct spine_draw_list list = {0};
+	CHECK(backend->build_draw_list(instance, &list));
+	const size_t vertices = list.vertex_count;
+	const double before = vertex_sum(&list);
+	backend->bone_translate(instance, head, 5.0f, 0.0f);
+	backend->update_world_transform(instance);
+	CHECK(backend->build_draw_list(instance, &list));
+	CHECK(list.vertex_count == vertices);
+	CHECK(fabs(vertex_sum(&list) - before) > 1.0);
+	backend->bone_translate(instance, head, -5.0f, 0.0f);
+	backend->update_world_transform(instance);
+	CHECK(backend->build_draw_list(instance, &list));
+	CHECK_NEAR(vertex_sum(&list), before, 1e-2);
+	spine_draw_list_free(&list);
+	backend->free_instance(instance);
+	backend->free_asset(asset);
+}
+
 int main(void)
 {
 	backend = spine_backend_41();
@@ -650,5 +792,8 @@ int main(void)
 	test_release_page_images();
 	test_no_zero_size_allocations();
 	test_crlf_atlas();
+	test_describe();
+	test_animation_queue_and_overlay();
+	test_bone_access();
 	return TEST_RESULT();
 }

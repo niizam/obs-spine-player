@@ -9,6 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "skeleton-desc.h"
+
 struct spine_allocator {
 	void *(*alloc)(size_t size);
 	void *(*realloc)(void *pointer, size_t size);
@@ -99,6 +101,23 @@ struct spine_backend {
 	bool (*animation_bounds)(struct spine_instance *instance, const char *name, struct spine_bounds *out);
 	/* Clears and refills list; returns false on allocation failure. */
 	bool (*build_draw_list)(struct spine_instance *instance, struct spine_draw_list *list);
+
+	/* Read-only description of the skeleton data, built once and owned by the asset. */
+	const struct spine_skeleton_desc *(*describe)(struct spine_asset *asset);
+	/* Queues an animation after the current one on the track. False when the name is absent. */
+	bool (*add_animation)(struct spine_instance *instance, int track, const char *name, bool loop, float delay);
+	void (*set_empty_animation)(struct spine_instance *instance, int track, float mix);
+	/* Plays "<source> (mouth)": the source's timelines at the given indices (shared, not copied),
+	 * looping over [start, end]. The instance owns the overlay until it is freed. */
+	bool (*set_overlay)(struct spine_instance *instance, int track, int source_animation, const int *timelines,
+			    size_t count, float start, float end, bool loop);
+	/* Bone index of the named slot (exact match), or -1. */
+	int (*find_slot_bone)(struct spine_instance *instance, const char *slot);
+	/* The bone's parent a, b, c, d; false for the root. */
+	bool (*bone_parent_matrix)(struct spine_instance *instance, int bone, float m[4]);
+	/* Adds to the bone's local x and y. */
+	void (*bone_translate)(struct spine_instance *instance, int bone, float dx, float dy);
+	void (*update_world_transform)(struct spine_instance *instance);
 };
 
 const struct spine_backend *spine_backend_41(void);
