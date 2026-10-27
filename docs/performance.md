@@ -50,6 +50,8 @@ Same machine and portable OBS (30 fps). MekamiShifty is in `idle` at 540x960, wi
 - Frame render time is CPU-side and barely changes between modes.
 - GPU cost is noise-level for Off, FXAA and 1.5x on this GPU. 2x roughly doubles it.
 - On a weak GPU the 2.25x and 4x pixel counts will matter more. This was not measured on such hardware.
+- The cost scales with canvas size. These numbers are for 540x960. At the plugin's default 1080x1920 canvas, 2x renders 2160x3840: 8.3 million pixels per redraw, four times this test.
+- FXAA and 2x were also checked under OBS's OpenGL renderer, which Linux and macOS use. Both render correctly with no shader errors.
 
 **Visual comparison,** using zoomed crops of a still region:
 - FXAA softens edges slightly.
