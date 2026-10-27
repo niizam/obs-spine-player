@@ -79,3 +79,10 @@ Renderer: Native draws Spine 3.7, 4.0 and 4.1 skeletons, so the browser fallback
   - Curian (3.7.93) natively, with yap `auto`, expecting the derived mouth-overlay log, and yap toggled with the tone;
   - MekamiShifty (4.1) as a regression check;
   - 0 leaks at shutdown.
+
+## Erratum (implementation, 2026-10-27)
+
+- **One adapter source.** `src/native/backend.c` is compiled for 3.7, 4.0 and 4.1 with compatibility macros, instead of a separate `backend-37.c`. The differences turned out to be local.
+- **The 3.7 parity reference** reads the `.skel` through `data/player/spine37-binary.js`, which is the browser's own 3.7 path. JSON exports round numbers.
+- **spine-c 3.7 keeps the C runtime allocator.** Its `Skeleton.c` grows the update cache with the C library's `realloc`. With OBS's `bmalloc` (`_aligned_malloc` on Windows), that corrupted the heap and crashed OBS on Curian. The cost: OBS's leak counter does not cover 3.7 runtime allocations.
+- **JSON exports missing `skeleton.hash` or `skeleton.spine`** are rejected before spine-c 3.7 or 4.0 reads them, because both copy those fields without a NULL check. 4.1 rejects them through its own version check.

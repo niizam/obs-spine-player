@@ -36,8 +36,12 @@ This boundary keeps OBS-specific lifetime and audio threading out of the player,
 
 With **Renderer: Native**, `spine-source.c` creates no browser source. Instead it owns a `native_renderer` (`src/native/native-renderer.c`). Design: [stage 1 spec](superpowers/specs/2026-10-27-native-renderer-41-design.md).
 
-- **Version backends.** `src/native/spine-backend.h` is a version-neutral interface (load, animate, bounds, draw lists). `backend-41.c` implements it on the vendored spine-c 4.1 (`third_party/spine-c-4.1`).
-  - Each Spine version family is compiled with a generated forced-include header (`src/native/spine41-prefix.h`, from `tools/generate-spine-prefix.js`) that renames every external symbol (`sp41_*`). Several runtimes can therefore share the one plugin module.
+- **Version backends.** `src/native/spine-backend.h` is a version-neutral interface: load, animate, bounds, draw lists, skeleton description, overlays, bone access, and blend factors.
+  - `src/native/backend.c` implements it and is compiled three times (`SPINE_BACKEND_VERSION` 37, 40, 41) against the vendored spine-c 3.7, 4.0 and 4.1 (`third_party/spine-c-<ver>`). Compatibility macros cover the API differences.
+  - `src/native/backends.c` maps a detected Spine family to its backend. The loader stores that backend with each result, so an asset is always freed by its own runtime.
+  - Each Spine version family is compiled with a generated forced-include header (`src/native/spine37-prefix.h`, `spine40-prefix.h`, `spine41-prefix.h`, from `tools/generate-spine-prefix.js`). It renames every external symbol (`sp37_*`, `sp40_*`, `sp41_*`), so all three runtimes share the one plugin module.
+  - Blend factors come from each backend, because spine-ts 3.7 uses `gl.blendFunc` while 4.x uses separate alpha factors.
+  - spine-c 3.7 keeps the C library allocator, because its `Skeleton.c` calls `realloc` directly.
   - The `spine41-prefix-check` test fails if a symbol escapes the prefix.
 - **Threads.**
   - Loading happens on a per-source background thread, and only the latest request is kept.
