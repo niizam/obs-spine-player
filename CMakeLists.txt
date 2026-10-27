@@ -13,7 +13,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/spine-runtime.cmake")
 spine_add_raw_runtime(3.7)
 spine_add_raw_runtime(4.0)
 spine_add_raw_runtime(4.1)
-spine_add_backend(VERSION 4.1 PREFIX sp41_ SOURCES src/native/backend-41.c)
+spine_add_backend(VERSION 4.0 PREFIX sp40_ SOURCES src/native/backend-4x.c)
+spine_add_backend(VERSION 4.1 PREFIX sp41_ SOURCES src/native/backend-4x.c)
 
 add_library(obs-spine-player MODULE)
 target_sources(
@@ -55,7 +56,7 @@ target_sources(
     src/native/antialiasing.h
 )
 target_include_directories(obs-spine-player PRIVATE src src/native)
-target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
+target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-40 spine-backend-41)
 if(WIN32)
   target_link_libraries(obs-spine-player PRIVATE user32)
 elseif(APPLE)
@@ -141,6 +142,7 @@ function(spine_add_backend_test tag version)
   endif()
   add_test(NAME backend-${tag}-tests COMMAND backend-${tag}-tests)
 endfunction()
+spine_add_backend_test(40 4.0)
 spine_add_backend_test(41 4.1)
 
 add_executable(framing-tests tests/framing-test.c src/native/framing.c)

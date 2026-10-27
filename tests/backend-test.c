@@ -434,7 +434,7 @@ static void test_empty_skeleton(void)
 {
 	char path[1024];
 	snprintf(path, sizeof(path), "%s/backend41-empty.json", TEST_OUTPUT_DIR);
-	const char *json = "{\"skeleton\":{\"spine\":\"4.1.17\"},\"bones\":[{\"name\":\"root\"}]}";
+	const char *json = "{\"skeleton\":{\"hash\":\"x\",\"spine\":\"" BACKEND_NAME ".0\"},\"bones\":[{\"name\":\"root\"}]}";
 	CHECK(write_all(path, json, strlen(json)));
 	char error[512] = "";
 	struct spine_asset *asset = load(path, FIXTURE("spineboy-pma.atlas"), error, sizeof(error));
@@ -453,6 +453,24 @@ static void test_empty_skeleton(void)
 	spine_draw_list_free(&list);
 	backend->free_instance(instance);
 	backend->free_asset(asset);
+}
+
+/* spine-c 3.7/4.0 read skeleton.hash and skeleton.spine without a NULL check; such files must fail, not crash. */
+static void test_json_without_hash(void)
+{
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/backend-nohash.json", TEST_OUTPUT_DIR);
+	const char *json = "{\"skeleton\":{\"x\":0},\"bones\":[{\"name\":\"root\"}]}";
+	CHECK(write_all(path, json, strlen(json)));
+	char error[512] = "";
+	struct spine_asset *asset = load(path, FIXTURE("spineboy-pma.atlas"), error, sizeof(error));
+	/* 4.1 rejects it through its own version check; 3.7/4.0 through the backend's pre-check. */
+	CHECK(asset == NULL);
+	CHECK(error[0] != '\0');
+	if (strcmp(BACKEND_NAME, "4.1") != 0)
+		CHECK(strstr(error, "hash") != NULL);
+	if (asset)
+		backend->free_asset(asset);
 }
 
 static void test_non_json_extension_reads_binary(void)
@@ -762,6 +780,33 @@ static void test_repeated_overlays_do_not_grow(void)
 	backend->set_allocator(NULL);
 }
 
+/* Blend factors copy each version's web runtime: 4.x uses separate alpha factors, 3.7 gl.blendFunc. */
+static void test_blend_factors(void)
+{
+	CHECK(backend->blend_factors != NULL);
+	if (!backend->blend_factors)
+		return;
+	const struct spine_blend_factors *normal = &backend->blend_factors[SPINE_BLEND_NORMAL];
+	const struct spine_blend_factors *additive = &backend->blend_factors[SPINE_BLEND_ADDITIVE];
+	const struct spine_blend_factors *multiply = &backend->blend_factors[SPINE_BLEND_MULTIPLY];
+	const struct spine_blend_factors *screen = &backend->blend_factors[SPINE_BLEND_SCREEN];
+	CHECK(normal->src_color == SPINE_FACTOR_ONE && normal->dst_color == SPINE_FACTOR_INV_SRC_ALPHA &&
+	      normal->src_alpha == SPINE_FACTOR_ONE && normal->dst_alpha == SPINE_FACTOR_INV_SRC_ALPHA);
+	CHECK(additive->src_color == SPINE_FACTOR_ONE && additive->dst_color == SPINE_FACTOR_ONE &&
+	      additive->src_alpha == SPINE_FACTOR_ONE && additive->dst_alpha == SPINE_FACTOR_ONE);
+	CHECK(multiply->src_color == SPINE_FACTOR_DST_COLOR && multiply->dst_color == SPINE_FACTOR_INV_SRC_ALPHA &&
+	      multiply->dst_alpha == SPINE_FACTOR_INV_SRC_ALPHA);
+	CHECK(screen->src_color == SPINE_FACTOR_ONE && screen->dst_color == SPINE_FACTOR_INV_SRC_ALPHA &&
+	      screen->dst_alpha == SPINE_FACTOR_INV_SRC_ALPHA);
+	if (strcmp(BACKEND_NAME, "3.7") == 0) {
+		CHECK(multiply->src_alpha == SPINE_FACTOR_DST_ALPHA);
+		CHECK(screen->src_alpha == SPINE_FACTOR_ONE);
+	} else {
+		CHECK(multiply->src_alpha == SPINE_FACTOR_INV_SRC_ALPHA);
+		CHECK(screen->src_alpha == SPINE_FACTOR_INV_SRC_COLOR);
+	}
+}
+
 static double vertex_sum(const struct spine_draw_list *list)
 {
 	double sum = 0;
@@ -828,6 +873,7 @@ int main(void)
 	test_draw_list_well_formed();
 	test_draw_list_reuse();
 	test_empty_skeleton();
+	test_json_without_hash();
 	test_non_json_extension_reads_binary();
 	test_release_page_images();
 	test_no_zero_size_allocations();
@@ -835,6 +881,7 @@ int main(void)
 	test_describe();
 	test_animation_queue_and_overlay();
 	test_bone_access();
+	test_blend_factors();
 	test_repeated_overlays_do_not_grow();
 	return TEST_RESULT();
 }

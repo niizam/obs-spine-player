@@ -29,9 +29,12 @@ function(spine_add_backend)
 
   add_library(${target} STATIC ${runtime_sources} ${SPINE_SOURCES})
   target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/native")
+  # src/ of the runtime exposes its private Json.h, used to pre-validate JSON exports.
   target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spine-c-${SPINE_VERSION}/include"
+                                               "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spine-c-${SPINE_VERSION}/src"
                                                "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_compile_features(${target} PRIVATE c_std_11)
+  target_compile_definitions(${target} PRIVATE SPINE_BACKEND_VERSION=${tag})
   set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
   if(MSVC)
     target_compile_options(${target} PRIVATE "/FI${prefix_header}")

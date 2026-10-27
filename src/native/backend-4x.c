@@ -1,7 +1,20 @@
-/* Spine 4.1 backend. Compiled with the forced include spine41-prefix.h, so every
- * spine-c name used here resolves to the sp41_-prefixed copy of the runtime.
- * Everything except spine_backend_41() is static to keep the library's exported
- * names prefixed. */
+/* Spine 4.0 / 4.1 backend. Compiled once per version with SPINE_BACKEND_VERSION
+ * (40 or 41) and the matching forced include spine<ver>-prefix.h, so every
+ * spine-c name used here resolves to that version's prefixed runtime.
+ * Everything except spine_backend_<ver>() is static to keep the library's
+ * exported names prefixed. */
+
+#if SPINE_BACKEND_VERSION == 41
+#define BACKEND_NAME "4.1"
+#define BACKEND_BINARY_FORMAT SKELETON_BINARY_41
+#define BACKEND_ENTRY spine_backend_41
+#elif SPINE_BACKEND_VERSION == 40
+#define BACKEND_NAME "4.0"
+#define BACKEND_BINARY_FORMAT SKELETON_BINARY_40
+#define BACKEND_ENTRY spine_backend_40
+#else
+#error "SPINE_BACKEND_VERSION must be 40 or 41"
+#endif
 
 #include "spine-backend.h"
 #include "atlas-image.h"
@@ -10,6 +23,9 @@
 
 #include <spine/spine.h>
 #include <spine/extension.h>
+#if SPINE_BACKEND_VERSION < 41
+#include <spine/Json.h>
+#endif
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -257,9 +273,10 @@ static bool load_skeleton(struct spine_asset *asset, const char *skeleton_path, 
 		/* spine-c's binary reader trusts its input; let the bounds-checked reader
 		 * reject truncated or corrupt files first. */
 		size_t names = 0;
-		if (skeleton_binary_detect((const uint8_t *)bytes, size, NULL, 0) != SKELETON_BINARY_41 ||
+		if (skeleton_binary_detect((const uint8_t *)bytes, size, NULL, 0) != BACKEND_BINARY_FORMAT ||
 		    !skeleton_binary_animation_names((const uint8_t *)bytes, size, count_name, &names)) {
-			set_error(error, error_size, "skeleton %s is not a valid Spine 4.1 binary export", skeleton_path);
+			set_error(error, error_size, "skeleton %s is not a valid Spine " BACKEND_NAME " binary export",
+				  skeleton_path);
 			free(bytes);
 			return false;
 		}
@@ -273,6 +290,20 @@ static bool load_skeleton(struct spine_asset *asset, const char *skeleton_path, 
 		if (binary)
 			spSkeletonBinary_dispose(binary);
 	} else {
+#if SPINE_BACKEND_VERSION < 41
+		/* spine-c 4.0 copies skeleton.hash and skeleton.spine without a NULL check. */
+		Json *root = Json_create(bytes);
+		Json *skeleton = root ? Json_getItem(root, "skeleton") : NULL;
+		const bool complete = !skeleton || (Json_getString(skeleton, "hash", NULL) &&
+						    Json_getString(skeleton, "spine", NULL));
+		if (root)
+			Json_dispose(root);
+		if (!complete) {
+			set_error(error, error_size, "skeleton %s lacks skeleton.hash or skeleton.spine", skeleton_path);
+			free(bytes);
+			return false;
+		}
+#endif
 		spSkeletonJson *json = spSkeletonJson_create(asset->atlas);
 		if (json) {
 			asset->skeleton_data = spSkeletonJson_readSkeletonData(json, bytes);
@@ -467,7 +498,12 @@ static int attachment_world_vertices(struct spine_instance *instance, spSlot *sl
 	if (attachment->type == SP_ATTACHMENT_REGION) {
 		if (!ensure_world(instance, 8))
 			return -1;
+#if SPINE_BACKEND_VERSION >= 41
 		spRegionAttachment_computeWorldVertices((spRegionAttachment *)attachment, slot, instance->world, 0, 2);
+#else
+		spRegionAttachment_computeWorldVertices((spRegionAttachment *)attachment, slot->bone, instance->world, 0,
+							2);
+#endif
 		return 8;
 	}
 	if (attachment->type == SP_ATTACHMENT_MESH) {
@@ -728,9 +764,11 @@ static enum spine_timeline_kind timeline_target(const spTimeline *timeline, int 
 	case SP_TIMELINE_DEFORM:
 		*target = ((const spDeformTimeline *)timeline)->slotIndex;
 		return SPINE_TIMELINE_SLOT;
+#if SPINE_BACKEND_VERSION >= 41
 	case SP_TIMELINE_SEQUENCE:
 		*target = ((const spSequenceTimeline *)timeline)->slotIndex;
 		return SPINE_TIMELINE_SLOT;
+#endif
 	case SP_TIMELINE_ROTATE:
 		*target = ((const spRotateTimeline *)timeline)->boneIndex;
 		return SPINE_TIMELINE_BONE;
@@ -966,8 +1004,19 @@ static void update_world_transform(struct spine_instance *instance)
 		spSkeleton_updateWorldTransform(instance->skeleton);
 }
 
+/* spine-ts 4.x with premultiplied alpha: separate colour and alpha factors. */
+static const struct spine_blend_factors blend_factors[4] = {
+	[SPINE_BLEND_NORMAL] = {SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA, SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA},
+	[SPINE_BLEND_ADDITIVE] = {SPINE_FACTOR_ONE, SPINE_FACTOR_ONE, SPINE_FACTOR_ONE, SPINE_FACTOR_ONE},
+	[SPINE_BLEND_MULTIPLY] = {SPINE_FACTOR_DST_COLOR, SPINE_FACTOR_INV_SRC_ALPHA, SPINE_FACTOR_INV_SRC_ALPHA,
+				  SPINE_FACTOR_INV_SRC_ALPHA},
+	[SPINE_BLEND_SCREEN] = {SPINE_FACTOR_ONE, SPINE_FACTOR_INV_SRC_ALPHA, SPINE_FACTOR_INV_SRC_COLOR,
+				SPINE_FACTOR_INV_SRC_ALPHA},
+};
+
 static const struct spine_backend backend = {
-	.name = "4.1",
+	.name = BACKEND_NAME,
+	.blend_factors = blend_factors,
 	.set_allocator = set_allocator,
 	.shutdown = shutdown_runtime,
 	.load = load,
@@ -993,7 +1042,7 @@ static const struct spine_backend backend = {
 	.update_world_transform = update_world_transform,
 };
 
-const struct spine_backend *spine_backend_41(void)
+const struct spine_backend *BACKEND_ENTRY(void)
 {
 	return &backend;
 }

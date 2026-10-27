@@ -55,6 +55,22 @@ enum spine_blend {
 	SPINE_BLEND_SCREEN,
 };
 
+/* Blend factors per Spine blend mode; each backend copies its web runtime. */
+enum spine_blend_factor {
+	SPINE_FACTOR_ZERO,
+	SPINE_FACTOR_ONE,
+	SPINE_FACTOR_SRC_COLOR,
+	SPINE_FACTOR_INV_SRC_COLOR,
+	SPINE_FACTOR_SRC_ALPHA,
+	SPINE_FACTOR_INV_SRC_ALPHA,
+	SPINE_FACTOR_DST_COLOR,
+	SPINE_FACTOR_DST_ALPHA,
+};
+
+struct spine_blend_factors {
+	enum spine_blend_factor src_color, dst_color, src_alpha, dst_alpha;
+};
+
 struct spine_draw_batch {
 	uint32_t page;
 	enum spine_blend blend;
@@ -79,6 +95,8 @@ struct spine_instance;
 
 struct spine_backend {
 	const char *name;
+	/* Four entries, indexed by enum spine_blend. */
+	const struct spine_blend_factors *blend_factors;
 	/* Routes the runtime's allocations; NULL keeps the C library allocator. */
 	void (*set_allocator)(const struct spine_allocator *allocator);
 	/* Frees runtime-wide caches. Call at module unload, after every asset and instance is freed. */
@@ -120,4 +138,6 @@ struct spine_backend {
 	void (*update_world_transform)(struct spine_instance *instance);
 };
 
+const struct spine_backend *spine_backend_37(void);
+const struct spine_backend *spine_backend_40(void);
 const struct spine_backend *spine_backend_41(void);

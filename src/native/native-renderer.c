@@ -789,9 +789,37 @@ static bool upload_buffers(struct native_renderer *renderer)
 	return true;
 }
 
-/* Factors copied from spine-ts 4.1 (premultiplied alpha): colour src/dst, alpha src/dst. */
-static void set_blend(enum spine_blend blend)
+static enum gs_blend_type gs_factor(enum spine_blend_factor factor)
 {
+	switch (factor) {
+	case SPINE_FACTOR_ZERO:
+		return GS_BLEND_ZERO;
+	case SPINE_FACTOR_SRC_COLOR:
+		return GS_BLEND_SRCCOLOR;
+	case SPINE_FACTOR_INV_SRC_COLOR:
+		return GS_BLEND_INVSRCCOLOR;
+	case SPINE_FACTOR_SRC_ALPHA:
+		return GS_BLEND_SRCALPHA;
+	case SPINE_FACTOR_INV_SRC_ALPHA:
+		return GS_BLEND_INVSRCALPHA;
+	case SPINE_FACTOR_DST_COLOR:
+		return GS_BLEND_DSTCOLOR;
+	case SPINE_FACTOR_DST_ALPHA:
+		return GS_BLEND_DSTALPHA;
+	default:
+		return GS_BLEND_ONE;
+	}
+}
+
+/* Each backend supplies the factors of its version's web runtime. */
+static void set_blend(const struct spine_backend *backend, enum spine_blend blend)
+{
+	if (backend->blend_factors && blend >= SPINE_BLEND_NORMAL && blend <= SPINE_BLEND_SCREEN) {
+		const struct spine_blend_factors *f = &backend->blend_factors[blend];
+		gs_blend_function_separate(gs_factor(f->src_color), gs_factor(f->dst_color), gs_factor(f->src_alpha),
+					   gs_factor(f->dst_alpha));
+		return;
+	}
 	switch (blend) {
 	case SPINE_BLEND_ADDITIVE:
 		gs_blend_function_separate(GS_BLEND_ONE, GS_BLEND_ONE, GS_BLEND_ONE, GS_BLEND_ONE);
@@ -840,7 +868,7 @@ static bool draw_skeleton(struct native_renderer *renderer, uint32_t width, uint
 		const struct spine_draw_batch *batch = &renderer->list.batches[index];
 		if (batch->page >= renderer->texture_count)
 			continue;
-		set_blend(batch->blend);
+		set_blend(renderer->backend, batch->blend);
 		gs_effect_set_texture(renderer->image_param, renderer->textures[batch->page]);
 		gs_draw(GS_TRIS, batch->first_index, batch->index_count);
 	}
