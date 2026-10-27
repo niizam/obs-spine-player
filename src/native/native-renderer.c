@@ -1,5 +1,6 @@
 #include "native-renderer.h"
 
+#include "backends.h"
 #include "draw-list.h"
 #include "eye-tracker.h"
 #include "framing.h"
@@ -34,6 +35,7 @@ struct native_command {
 
 struct load_result {
 	uint64_t generation;
+	const struct spine_backend *backend; /* the runtime that owns asset */
 	enum native_renderer_state state;
 	struct spine_asset *asset;
 	char version[32];
@@ -340,8 +342,9 @@ static void free_result(const struct native_renderer *renderer, struct load_resu
 {
 	if (!result)
 		return;
+	(void)renderer;
 	if (result->asset)
-		renderer->backend->free_asset(result->asset);
+		result->backend->free_asset(result->asset); /* never another version's vtable */
 	bfree(result);
 }
 
@@ -371,21 +374,22 @@ static struct load_result *load_asset(struct native_renderer *renderer, const ch
 		family = forced;
 	if (!result->version[0])
 		snprintf(result->version, sizeof(result->version), "unknown");
-	if (family != SPINE_FAMILY_41) {
+	result->backend = spine_backend_for_family(family);
+	if (!result->backend) {
 		result->state = NATIVE_NEEDS_BROWSER;
 		return result;
 	}
 
 	char error[512] = "";
 	const uint64_t start = os_gettime_ns();
-	result->asset = renderer->backend->load(skeleton, atlas, &obs_decoder, error, sizeof(error));
+	result->asset = result->backend->load(skeleton, atlas, &obs_decoder, error, sizeof(error));
 	if (!result->asset) {
 		native_log(renderer, LOG_ERROR, "native renderer could not load Spine %s asset: %s", result->version,
 			   error[0] ? error : "unknown error");
 		return result;
 	}
 	native_log(renderer, LOG_INFO, "native renderer loaded Spine %s skeleton %s (%zu atlas page(s)) in %.0f ms",
-		   result->version, skeleton, renderer->backend->page_count(result->asset),
+		   result->version, skeleton, result->backend->page_count(result->asset),
 		   (double)(os_gettime_ns() - start) / 1000000.0);
 	result->state = NATIVE_READY;
 	return result;
@@ -451,7 +455,10 @@ struct native_renderer *native_renderer_create(obs_source_t *owner)
 	renderer->applied = renderer->controls;
 	if (!allocator_set) {
 		static const struct spine_allocator obs_allocator = {bmalloc, brealloc, bfree};
-		renderer->backend->set_allocator(&obs_allocator);
+		size_t count = 0;
+		const struct spine_backend *const *backends = spine_backends_all(&count);
+		for (size_t i = 0; i < count; i++)
+			backends[i]->set_allocator(&obs_allocator);
 		allocator_set = true;
 	}
 	pthread_mutex_init(&renderer->mutex, NULL);
@@ -618,8 +625,9 @@ static void adopt_posted(struct native_renderer *renderer)
 		return;
 	}
 
-	release_skeleton(renderer);
+	release_skeleton(renderer); /* through the backend of the skeleton being released */
 	if (result->state == NATIVE_READY) {
+		renderer->backend = result->backend;
 		if (create_textures(renderer, result->asset)) {
 			renderer->asset = result->asset;
 			result->asset = NULL;

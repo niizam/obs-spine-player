@@ -564,7 +564,7 @@ static void native_fallback_task(void *param)
 		pthread_mutex_unlock(&context->renderer_mutex);
 		if (current) {
 			spine_log(context, LOG_WARNING,
-				  "native renderer supports Spine 4.1 only for now; using the browser renderer for %s",
+				  "native renderer cannot draw Spine %s; using the browser renderer",
 				  version);
 			context->native_fallback = true;
 			apply_renderer(context);

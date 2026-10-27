@@ -11,7 +11,7 @@ OBS hotkeys ───────> emotion/action command ───┘
 Desktop cursor ────> normalized x/y ─────────────> SpineEyeTracker ────────> eye bones
 ```
 
-This boundary keeps OBS-specific lifetime and audio threading out of the player, while keeping Spine runtime objects out of native code. The optional native renderer (below) replaces the browser for Spine 4.1 skeletons.
+This boundary keeps OBS-specific lifetime and audio threading out of the player, while keeping Spine runtime objects out of native code. The optional native renderer (below) replaces the browser for Spine 3.7, 4.0 and 4.1 skeletons.
 
 ## Components
 

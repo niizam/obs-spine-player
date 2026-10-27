@@ -55,6 +55,8 @@ target_sources(
     src/native/eye-tracker.h
     src/native/antialiasing.c
     src/native/antialiasing.h
+    src/native/backends.c
+    src/native/backends.h
 )
 target_include_directories(obs-spine-player PRIVATE src src/native)
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-37 spine-backend-40 spine-backend-41)
@@ -186,6 +188,15 @@ if(UNIX)
   target_link_libraries(antialiasing-tests PRIVATE m)
 endif()
 add_test(NAME antialiasing-tests COMMAND antialiasing-tests)
+
+add_executable(backends-tests tests/backends-test.c src/native/backends.c src/native/atlas-image.c src/native/draw-list.c src/skeleton-binary.c)
+target_include_directories(backends-tests PRIVATE src src/native tests)
+target_link_libraries(backends-tests PRIVATE spine-backend-37 spine-backend-40 spine-backend-41)
+target_compile_features(backends-tests PRIVATE c_std_11)
+if(UNIX)
+  target_link_libraries(backends-tests PRIVATE m pthread)
+endif()
+add_test(NAME backends-tests COMMAND backends-tests)
 
 add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
 target_include_directories(level-gate-tests PRIVATE src)

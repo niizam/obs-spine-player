@@ -1,7 +1,7 @@
 #include <obs-module.h>
 
 #include "spine-source.h"
-#include "spine-backend.h"
+#include "backends.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-spine-player", "en-US")
@@ -24,5 +24,8 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	/* Every source has been destroyed by now; free the Spine runtimes' shared caches. */
-	spine_backend_41()->shutdown();
+	size_t count = 0;
+	const struct spine_backend *const *backends = spine_backends_all(&count);
+	for (size_t i = 0; i < count; i++)
+		backends[i]->shutdown();
 }
