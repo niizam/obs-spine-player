@@ -30,6 +30,8 @@ target_sources(
     src/skeleton-binary.h
     src/spine-source.c
     src/spine-source.h
+    src/native/atlas-image.c
+    src/native/atlas-image.h
 )
 target_link_libraries(obs-spine-player PRIVATE OBS::libobs spine-backend-41)
 if(WIN32)
@@ -80,6 +82,14 @@ if(NODE_EXECUTABLE)
   file(GLOB PLAYER_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.test.js")
   add_test(NAME player-state-tests COMMAND "${NODE_EXECUTABLE}" --test ${PLAYER_TEST_FILES})
 endif()
+
+add_executable(atlas-image-tests tests/atlas-image-test.c src/native/atlas-image.c)
+target_include_directories(atlas-image-tests PRIVATE src/native tests)
+target_compile_features(atlas-image-tests PRIVATE c_std_11)
+if(UNIX)
+  target_link_libraries(atlas-image-tests PRIVATE m)
+endif()
+add_test(NAME atlas-image-tests COMMAND atlas-image-tests)
 
 add_executable(level-gate-tests tests/level-gate-test.c src/level-gate.c)
 target_include_directories(level-gate-tests PRIVATE src)
