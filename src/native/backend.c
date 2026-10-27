@@ -292,7 +292,7 @@ static bool load_skeleton(struct spine_asset *asset, const char *skeleton_path, 
 		return false;
 	}
 
-	/* Same rule as the browser player: JSON only for a .json extension, binary otherwise. */
+	/* JSON only for a .json extension, binary otherwise (the web players' rule). */
 	if (!has_extension(skeleton_path, "json")) {
 		/* spine-c's binary reader trusts its input; let the bounds-checked reader
 		 * reject truncated or corrupt files first. */

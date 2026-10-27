@@ -1,7 +1,6 @@
 #include "spine-source.h"
 
 #include "animation-catalog.h"
-#include "browser-bridge.h"
 #include "cursor-input.h"
 #include "level-gate.h"
 #include "native-renderer.h"
@@ -15,9 +14,8 @@
 
 #define SETTING_CORE_PATH "core_path"
 #define SETTING_ATLAS_PATH "atlas_path"
-#define SETTING_RENDERER "renderer"
-#define RENDERER_BROWSER "browser"
-#define RENDERER_NATIVE "native"
+/* Saved by versions that could draw through a hidden Browser Source; erased on load. */
+#define LEGACY_SETTING_RENDERER "renderer"
 #define SETTING_NATIVE_AA "native_aa"
 #define SETTING_RUNTIME "runtime"
 #define SETTING_DEFAULT_ANIMATION "default_animation"
@@ -55,17 +53,9 @@ struct emotion_hotkey {
 
 struct spine_source {
 	obs_source_t *source;
-	/* browser and native are swapped on the UI thread under renderer_mutex;
-	 * the graphics thread reads them under the same lock. */
-	pthread_mutex_t renderer_mutex;
-	obs_source_t *browser;
+	/* Created with the source and destroyed with it, so every thread may use it without a lock;
+	 * its own functions document which thread each one belongs to. */
 	struct native_renderer *native;
-	bool renderer_native;
-	bool native_fallback;
-	bool fallback_queued;          /* renderer_mutex */
-	uint64_t selection_serial;     /* renderer_mutex; bumped when renderer or assets change */
-	uint64_t fallback_serial;      /* renderer_mutex */
-	char fallback_version[32];     /* renderer_mutex */
 	bool selection_seen;
 	char *seen_core;
 	char *seen_atlas;
@@ -74,7 +64,6 @@ struct spine_source {
 	char *audio_input_name;
 	uint32_t width;
 	uint32_t height;
-	float configuration_timer;
 	float threshold_db;
 	float attack_ms;
 	float release_ms;
@@ -86,9 +75,6 @@ struct spine_source {
 	bool eye_tracking_enabled;
 	bool state_enabled;
 	bool hotkeys_enabled;
-	bool bridge_ready_logged;
-	bool bridge_failure_logged;
-	bool first_render_logged;
 	bool cursor_ready_logged;
 	bool cursor_failure_logged;
 	struct emotion_hotkey emotion_hotkeys[EMOTION_COUNT];
@@ -125,110 +111,6 @@ static const char *spine_source_get_name(void *unused)
 	return obs_module_text("SpineSource");
 }
 
-static obs_source_t *create_browser_source(struct spine_source *context, uint32_t width, uint32_t height)
-{
-	char *player_path = obs_module_file("player/index.html");
-	if (!player_path) {
-		spine_log(context, LOG_ERROR, "player/index.html is missing from the plugin data directory");
-		return NULL;
-	}
-	/* OBS can return a relative module path on Windows. Browser Source
-	 * prefixes local_file with http://absolute/, so URL normalization would
-	 * discard ../ segments before its local-file handler sees the path. */
-	char *absolute_path = os_get_abs_path_ptr(player_path);
-	if (!absolute_path) {
-		spine_log(context, LOG_ERROR, "could not resolve browser page to an absolute path: %s", player_path);
-		bfree(player_path);
-		return NULL;
-	}
-	bfree(player_path);
-	player_path = absolute_path;
-	if (!os_file_exists(player_path)) {
-		spine_log(context, LOG_ERROR, "browser page does not exist: %s", player_path);
-		bfree(player_path);
-		return NULL;
-	}
-
-	spine_log(context, LOG_INFO, "creating private Browser Source at %ux%u from %s", width, height, player_path);
-
-	obs_data_t *settings = obs_data_create();
-	obs_data_set_bool(settings, "is_local_file", true);
-	obs_data_set_string(settings, "local_file", player_path);
-	obs_data_set_int(settings, "width", width);
-	obs_data_set_int(settings, "height", height);
-	obs_data_set_bool(settings, "shutdown", false);
-	obs_data_set_bool(settings, "restart_when_active", false);
-	obs_data_set_bool(settings, "reroute_audio", false);
-	obs_data_set_int(settings, "webpage_control_level", 0);
-
-	obs_source_t *browser = obs_source_create_private("browser_source", "OBS Spine Player Renderer", settings);
-	obs_data_release(settings);
-	bfree(player_path);
-
-	if (!browser)
-		spine_log(context, LOG_ERROR, "could not create Browser Source; install or enable obs-browser");
-	else
-		spine_log(context, LOG_INFO, "private Browser Source created successfully");
-	return browser;
-}
-
-static obs_source_t *get_browser_ref(struct spine_source *context)
-{
-	pthread_mutex_lock(&context->renderer_mutex);
-	obs_source_t *browser = context->browser ? obs_source_get_ref(context->browser) : NULL;
-	pthread_mutex_unlock(&context->renderer_mutex);
-	return browser;
-}
-
-/* UI thread. Takes ownership of browser (may be NULL) and releases the previous one. */
-static void set_browser(struct spine_source *context, obs_source_t *browser)
-{
-	pthread_mutex_lock(&context->renderer_mutex);
-	obs_source_t *previous = context->browser;
-	context->browser = browser;
-	pthread_mutex_unlock(&context->renderer_mutex);
-	if (previous) {
-		spine_log(context, LOG_INFO, "releasing the private Browser Source");
-		obs_source_release(previous);
-	}
-}
-
-static bool send_browser_event(struct spine_source *context, const char *event_name, obs_data_t *payload)
-{
-	obs_source_t *browser = get_browser_ref(context);
-	if (!browser)
-		return false; /* native renderer active: nothing to send to */
-	const bool sent = browser_bridge_send(browser, event_name, payload);
-	obs_source_release(browser);
-	if (!sent && !context->bridge_failure_logged) {
-		spine_log(context, LOG_ERROR, "could not send browser event '%s'; the obs-browser procedure is unavailable",
-			  event_name);
-		context->bridge_failure_logged = true;
-	} else if (sent) {
-		if (context->bridge_failure_logged)
-			spine_log(context, LOG_INFO, "browser event bridge recovered");
-		else if (!context->bridge_ready_logged)
-			spine_log(context, LOG_INFO, "browser event bridge is available");
-		context->bridge_ready_logged = true;
-		context->bridge_failure_logged = false;
-	}
-	return sent;
-}
-
-static void update_browser_dimensions(struct spine_source *context)
-{
-	obs_source_t *browser = get_browser_ref(context);
-	if (!browser)
-		return;
-
-	obs_data_t *settings = obs_source_get_settings(browser);
-	obs_data_set_int(settings, "width", context->width);
-	obs_data_set_int(settings, "height", context->height);
-	obs_source_update(browser, settings);
-	obs_data_release(settings);
-	obs_source_release(browser);
-}
-
 static void copy_setting(char *out, size_t size, obs_data_t *settings, const char *name)
 {
 	const char *value = obs_data_get_string(settings, name);
@@ -237,39 +119,16 @@ static void copy_setting(char *out, size_t size, obs_data_t *settings, const cha
 
 static void send_yap_state(struct spine_source *context)
 {
-	pthread_mutex_lock(&context->renderer_mutex);
-	if (context->native) {
-		native_renderer_set_yapping(context->native, context->yap_enabled && context->gate.active);
-		pthread_mutex_unlock(&context->renderer_mutex);
-		return;
-	}
-	pthread_mutex_unlock(&context->renderer_mutex);
-
-	obs_data_t *payload = obs_data_create();
-	obs_data_set_bool(payload, "active", context->yap_enabled && context->gate.active);
-	send_browser_event(context, "obsSpineYap", payload);
-	obs_data_release(payload);
+	native_renderer_set_yapping(context->native, context->yap_enabled && context->gate.active);
 }
 
 static void send_cursor_position(struct spine_source *context, const struct cursor_position *position)
 {
-	pthread_mutex_lock(&context->renderer_mutex);
-	if (context->native) {
-		native_renderer_set_cursor(context->native, (float)position->x, (float)position->y);
-		pthread_mutex_unlock(&context->renderer_mutex);
-		return;
-	}
-	pthread_mutex_unlock(&context->renderer_mutex);
-
-	obs_data_t *payload = obs_data_create();
-	obs_data_set_double(payload, "x", position->x);
-	obs_data_set_double(payload, "y", position->y);
-	send_browser_event(context, "obsSpineCursor", payload);
-	obs_data_release(payload);
+	native_renderer_set_cursor(context->native, (float)position->x, (float)position->y);
 }
 
-/* Native renderer: the same controls the browser page receives. Returns false when native is not active. */
-static bool send_native_configuration(struct spine_source *context)
+/* Sends the character controls from the source settings to the renderer. */
+static void send_configuration(struct spine_source *context)
 {
 	struct native_controls controls = {0};
 	obs_data_t *settings = obs_source_get_settings(context->source);
@@ -285,64 +144,8 @@ static bool send_native_configuration(struct spine_source *context)
 	controls.eye_smoothing_ms = obs_data_get_double(settings, SETTING_EYE_SMOOTHING);
 	obs_data_release(settings);
 
-	pthread_mutex_lock(&context->renderer_mutex);
-	const bool native = context->native != NULL;
-	if (native) {
-		native_renderer_set_controls(context->native, &controls);
-		native_renderer_set_yapping(context->native, context->yap_enabled && context->gate.active);
-	}
-	pthread_mutex_unlock(&context->renderer_mutex);
-	return native;
-}
-
-static void send_configuration(struct spine_source *context)
-{
-	if (send_native_configuration(context))
-		return;
-	obs_source_t *browser = get_browser_ref(context);
-	if (!browser)
-		return;
-	obs_source_release(browser);
-
-	obs_data_t *settings = obs_source_get_settings(context->source);
-	obs_data_t *payload = obs_data_create();
-	obs_data_set_string(payload, "corePath", obs_data_get_string(settings, SETTING_CORE_PATH));
-	obs_data_set_string(payload, "atlasPath", obs_data_get_string(settings, SETTING_ATLAS_PATH));
-	obs_data_set_string(payload, "runtime", obs_data_get_string(settings, SETTING_RUNTIME));
-	obs_data_set_string(payload, "defaultAnimation", obs_data_get_string(settings, SETTING_DEFAULT_ANIMATION));
-	obs_data_set_string(payload, "yapAnimation", obs_data_get_string(settings, SETTING_YAP_ANIMATION));
-	obs_data_set_string(payload, "mouthSlots", obs_data_get_string(settings, SETTING_YAP_MOUTH_SLOTS));
-	obs_data_set_bool(payload, "yapEnabled", context->yap_enabled);
-	obs_data_set_bool(payload, "yapActive", context->yap_enabled && context->gate.active);
-	obs_data_set_bool(payload, "eyeTrackingEnabled", context->eye_tracking_enabled);
-	obs_data_set_string(payload, "eyeLeftSlots", obs_data_get_string(settings, SETTING_EYE_LEFT_SLOTS));
-	obs_data_set_string(payload, "eyeRightSlots", obs_data_get_string(settings, SETTING_EYE_RIGHT_SLOTS));
-	obs_data_set_double(payload, "eyeMaxX", obs_data_get_double(settings, SETTING_EYE_MAX_X));
-	obs_data_set_double(payload, "eyeMaxY", obs_data_get_double(settings, SETTING_EYE_MAX_Y));
-	obs_data_set_double(payload, "eyeSmoothingMs", obs_data_get_double(settings, SETTING_EYE_SMOOTHING));
-	obs_data_set_bool(payload, "stateEnabled", context->state_enabled);
-	obs_data_set_bool(payload, "hotkeysEnabled", context->hotkeys_enabled);
-	obs_data_set_int(payload, "width", context->width);
-	obs_data_set_int(payload, "height", context->height);
-
-	obs_data_array_t *emotions = obs_data_array_create();
-	for (size_t index = 0; index < EMOTION_COUNT; index++) {
-		char animation_key[32];
-		char loop_key[32];
-		emotion_setting_name(animation_key, sizeof(animation_key), index);
-		emotion_loop_setting_name(loop_key, sizeof(loop_key), index);
-		obs_data_t *emotion = obs_data_create();
-		obs_data_set_string(emotion, "animation", obs_data_get_string(settings, animation_key));
-		obs_data_set_bool(emotion, "loop", obs_data_get_bool(settings, loop_key));
-		obs_data_array_push_back(emotions, emotion);
-		obs_data_release(emotion);
-	}
-	obs_data_set_array(payload, "emotions", emotions);
-	obs_data_array_release(emotions);
-
-	send_browser_event(context, "obsSpineConfigure", payload);
-	obs_data_release(payload);
-	obs_data_release(settings);
+	native_renderer_set_controls(context->native, &controls);
+	send_yap_state(context);
 }
 
 static void send_emotion(struct spine_source *context, size_t index)
@@ -355,22 +158,8 @@ static void send_emotion(struct spine_source *context, size_t index)
 	emotion_setting_name(animation_key, sizeof(animation_key), index);
 	emotion_loop_setting_name(loop_key, sizeof(loop_key), index);
 	obs_data_t *settings = obs_source_get_settings(context->source);
-	const char *animation = obs_data_get_string(settings, animation_key);
-	pthread_mutex_lock(&context->renderer_mutex);
-	if (context->native) {
-		native_renderer_trigger(context->native, animation, obs_data_get_bool(settings, loop_key));
-		pthread_mutex_unlock(&context->renderer_mutex);
-		obs_data_release(settings);
-		return;
-	}
-	pthread_mutex_unlock(&context->renderer_mutex);
-	if (animation && *animation) {
-		obs_data_t *payload = obs_data_create();
-		obs_data_set_string(payload, "animation", animation);
-		obs_data_set_bool(payload, "loop", obs_data_get_bool(settings, loop_key));
-		send_browser_event(context, "obsSpineTrigger", payload);
-		obs_data_release(payload);
-	}
+	native_renderer_trigger(context->native, obs_data_get_string(settings, animation_key),
+				obs_data_get_bool(settings, loop_key));
 	obs_data_release(settings);
 }
 
@@ -386,18 +175,8 @@ static void emotion_hotkey_pressed(void *data, obs_hotkey_id id, obs_hotkey_t *h
 static void reset_hotkey_pressed(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey, bool pressed)
 {
 	struct spine_source *context = data;
-	if (pressed && context->state_enabled && context->hotkeys_enabled) {
-		pthread_mutex_lock(&context->renderer_mutex);
-		struct native_renderer *native = context->native;
-		if (native)
-			native_renderer_reset(native);
-		pthread_mutex_unlock(&context->renderer_mutex);
-		if (!native) {
-			obs_data_t *payload = obs_data_create();
-			send_browser_event(context, "obsSpineReset", payload);
-			obs_data_release(payload);
-		}
-	}
+	if (pressed && context->state_enabled && context->hotkeys_enabled)
+		native_renderer_reset(context->native);
 	UNUSED_PARAMETER(id);
 	UNUSED_PARAMETER(hotkey);
 }
@@ -512,74 +291,10 @@ static bool strings_differ(const char *a, const char *b)
 	return strcmp(a ? a : "", b ? b : "") != 0;
 }
 
-/* UI thread. Makes the active renderer match the setting and any fallback.
- * Returns true when a native renderer was created by this call. */
-static bool apply_renderer(struct spine_source *context)
-{
-	const bool use_native = context->renderer_native && !context->native_fallback;
-	if (use_native) {
-		bool created = false;
-		if (!context->native) {
-			struct native_renderer *renderer = native_renderer_create(context->source);
-			pthread_mutex_lock(&context->renderer_mutex);
-			context->native = renderer;
-			pthread_mutex_unlock(&context->renderer_mutex);
-			spine_log(context, LOG_INFO, "using the native renderer");
-			created = true;
-		}
-		set_browser(context, NULL);
-		return created;
-	}
-
-	pthread_mutex_lock(&context->renderer_mutex);
-	struct native_renderer *renderer = context->native;
-	context->native = NULL;
-	pthread_mutex_unlock(&context->renderer_mutex);
-	if (renderer) {
-		native_renderer_destroy(renderer);
-		spine_log(context, LOG_INFO, "native renderer stopped");
-	}
-	obs_source_t *browser = get_browser_ref(context);
-	if (browser)
-		obs_source_release(browser);
-	else
-		set_browser(context, create_browser_source(context, context->width, context->height));
-	return false;
-}
-
-/* UI thread, queued from the graphics thread when a native load needs the browser. */
-static void native_fallback_task(void *param)
-{
-	obs_weak_source_t *weak = param;
-	obs_source_t *source = obs_weak_source_get_source(weak);
-	obs_weak_source_release(weak);
-	if (!source)
-		return;
-	struct spine_source *context = obs_obj_get_data(source);
-	if (context && context->renderer_native && !context->native_fallback) {
-		pthread_mutex_lock(&context->renderer_mutex);
-		const bool current = context->fallback_serial == context->selection_serial;
-		char version[32];
-		snprintf(version, sizeof(version), "%s", context->fallback_version);
-		pthread_mutex_unlock(&context->renderer_mutex);
-		if (current) {
-			spine_log(context, LOG_WARNING,
-				  "native renderer cannot draw Spine %s; using the browser renderer",
-				  version);
-			context->native_fallback = true;
-			apply_renderer(context);
-			update_browser_dimensions(context);
-			send_configuration(context);
-		}
-	}
-	obs_source_release(source);
-}
-
 static void *spine_source_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct spine_source *context = bzalloc(sizeof(*context));
 	context->source = source;
-	pthread_mutex_init(&context->renderer_mutex, NULL);
 	context->reset_hotkey = OBS_INVALID_HOTKEY_ID;
 	for (size_t index = 0; index < EMOTION_COUNT; index++)
 		context->emotion_hotkeys[index].id = OBS_INVALID_HOTKEY_ID;
@@ -588,6 +303,11 @@ static void *spine_source_create(obs_data_t *settings, obs_source_t *source)
 	context->width = (uint32_t)obs_data_get_int(settings, SETTING_WIDTH);
 	context->height = (uint32_t)obs_data_get_int(settings, SETTING_HEIGHT);
 	spine_log(context, LOG_INFO, "creating source with a %ux%u canvas", context->width, context->height);
+	const char *legacy_renderer = obs_data_get_string(settings, LEGACY_SETTING_RENDERER);
+	if (legacy_renderer && strcmp(legacy_renderer, "browser") == 0)
+		spine_log(context, LOG_INFO, "the Browser renderer was removed; this source now draws natively");
+	obs_data_erase(settings, LEGACY_SETTING_RENDERER);
+	context->native = native_renderer_create(source);
 	register_hotkeys(context);
 	spine_source_update(context, settings);
 	return context;
@@ -603,19 +323,10 @@ static void spine_source_destroy(void *data)
 	disconnect_audio_source(context);
 	cursor_input_destroy(&context->cursor_input);
 	unregister_hotkeys(context);
-	pthread_mutex_lock(&context->renderer_mutex);
-	struct native_renderer *renderer = context->native;
-	obs_source_t *browser = context->browser;
-	context->native = NULL;
-	context->browser = NULL;
-	pthread_mutex_unlock(&context->renderer_mutex);
-	native_renderer_destroy(renderer);
-	if (browser)
-		obs_source_release(browser);
+	native_renderer_destroy(context->native);
 	bfree(context->seen_core);
 	bfree(context->seen_atlas);
 	bfree(context->seen_runtime);
-	pthread_mutex_destroy(&context->renderer_mutex);
 	bfree(context);
 }
 
@@ -638,11 +349,9 @@ static void spine_source_update(void *data, obs_data_t *settings)
 	const char *atlas_path = obs_data_get_string(settings, SETTING_ATLAS_PATH);
 	const char *runtime = obs_data_get_string(settings, SETTING_RUNTIME);
 	const char *default_animation = obs_data_get_string(settings, SETTING_DEFAULT_ANIMATION);
-	const char *renderer = obs_data_get_string(settings, SETTING_RENDERER);
-	const bool renderer_native = renderer && strcmp(renderer, RENDERER_NATIVE) == 0;
 	spine_log(context, LOG_INFO,
-		  "configuration updated: renderer=%s, runtime=%s, default animation=%s, canvas=%ux%u, yap=%s, eye tracking=%s, states=%s, hotkeys=%s",
-		  renderer_native ? RENDERER_NATIVE : RENDERER_BROWSER, runtime && *runtime ? runtime : "auto",
+		  "configuration updated: runtime=%s, default animation=%s, canvas=%ux%u, yap=%s, eye tracking=%s, states=%s, hotkeys=%s",
+		  runtime && *runtime ? runtime : "auto",
 		  default_animation && *default_animation ? default_animation : "idle",
 		  context->width, context->height, context->yap_enabled ? "on" : "off",
 		  context->eye_tracking_enabled ? "on" : "off",
@@ -653,33 +362,22 @@ static void spine_source_update(void *data, obs_data_t *settings)
 	log_asset_file(context, "skeleton", core_path);
 	log_asset_file(context, "atlas", atlas_path);
 
-	const bool selection_changed = !context->selection_seen || renderer_native != context->renderer_native ||
-				       strings_differ(core_path, context->seen_core) ||
+	const bool selection_changed = !context->selection_seen || strings_differ(core_path, context->seen_core) ||
 				       strings_differ(atlas_path, context->seen_atlas) ||
 				       strings_differ(runtime, context->seen_runtime);
 	if (selection_changed) {
 		context->selection_seen = true;
-		context->renderer_native = renderer_native;
-		context->native_fallback = false;
 		bfree(context->seen_core);
 		bfree(context->seen_atlas);
 		bfree(context->seen_runtime);
 		context->seen_core = bstrdup(core_path ? core_path : "");
 		context->seen_atlas = bstrdup(atlas_path ? atlas_path : "");
 		context->seen_runtime = bstrdup(runtime ? runtime : "");
-		pthread_mutex_lock(&context->renderer_mutex);
-		context->selection_serial++;
-		context->fallback_queued = false;
-		pthread_mutex_unlock(&context->renderer_mutex);
+		native_renderer_load(context->native, core_path, atlas_path, spine_family_from_setting(runtime));
 	}
-	const bool native_created = apply_renderer(context);
-	if (context->native) {
-		if (selection_changed || native_created)
-			native_renderer_load(context->native, core_path, atlas_path, spine_family_from_setting(runtime));
-		native_renderer_configure(context->native, default_animation, context->width, context->height);
-		native_renderer_set_antialiasing(context->native,
-						 native_aa_from_setting(obs_data_get_string(settings, SETTING_NATIVE_AA)));
-	}
+	native_renderer_configure(context->native, default_animation, context->width, context->height);
+	native_renderer_set_antialiasing(context->native,
+					 native_aa_from_setting(obs_data_get_string(settings, SETTING_NATIVE_AA)));
 	connect_audio_source(context, obs_data_get_string(settings, SETTING_YAP_AUDIO_SOURCE));
 	if (!context->yap_enabled) {
 		level_gate_reset(&context->gate);
@@ -687,8 +385,6 @@ static void spine_source_update(void *data, obs_data_t *settings)
 	}
 	if (!context->eye_tracking_enabled)
 		context->cursor_timer = 0.0f;
-	context->configuration_timer = 1.0f;
-	update_browser_dimensions(context);
 	send_configuration(context);
 }
 
@@ -710,23 +406,7 @@ static void spine_source_tick(void *data, float seconds)
 	if (!context)
 		return;
 
-	pthread_mutex_lock(&context->renderer_mutex);
-	const bool native_active = context->native != NULL;
-	bool queue_fallback = false;
-	if (native_active) {
-		native_renderer_tick(context->native, seconds);
-		char version[32];
-		if (native_renderer_state(context->native, version, sizeof(version)) == NATIVE_NEEDS_BROWSER &&
-		    !context->fallback_queued) {
-			context->fallback_queued = true;
-			context->fallback_serial = context->selection_serial;
-			snprintf(context->fallback_version, sizeof(context->fallback_version), "%s", version);
-			queue_fallback = true;
-		}
-	}
-	pthread_mutex_unlock(&context->renderer_mutex);
-	if (queue_fallback)
-		obs_queue_task(OBS_TASK_UI, native_fallback_task, obs_source_get_weak_source(context->source), false);
+	native_renderer_tick(context->native, seconds);
 
 	const long pending_peak = os_atomic_set_long(&context->pending_peak, 0);
 	const float level = context->yap_enabled ? (float)pending_peak / (float)PEAK_SCALE : 0.0f;
@@ -753,68 +433,19 @@ static void spine_source_tick(void *data, float seconds)
 			}
 		}
 	}
-
-	context->configuration_timer += seconds;
-	if (context->configuration_timer >= 1.0f) {
-		context->configuration_timer = 0.0f;
-		send_configuration(context);
-	}
 }
 
 static void spine_source_render(void *data, gs_effect_t *effect)
 {
 	struct spine_source *context = data;
 	UNUSED_PARAMETER(effect);
-	if (!context)
-		return;
-
-	pthread_mutex_lock(&context->renderer_mutex);
-	if (context->native) {
+	if (context)
 		native_renderer_render(context->native);
-		pthread_mutex_unlock(&context->renderer_mutex);
-		return;
-	}
-	obs_source_t *browser = context->browser ? obs_source_get_ref(context->browser) : NULL;
-	pthread_mutex_unlock(&context->renderer_mutex);
-
-	if (browser) {
-		if (!context->first_render_logged) {
-			spine_log(context, LOG_INFO, "rendering the private Browser Source for the first time");
-			context->first_render_logged = true;
-		}
-		obs_source_video_render(browser);
-		obs_source_release(browser);
-	}
-}
-
-static bool spine_source_audio_render(void *data, uint64_t *timestamp, struct obs_source_audio_mix *audio_output,
-				      uint32_t mixers, size_t channels, size_t sample_rate)
-{
-	UNUSED_PARAMETER(data);
-	UNUSED_PARAMETER(timestamp);
-	UNUSED_PARAMETER(audio_output);
-	UNUSED_PARAMETER(mixers);
-	UNUSED_PARAMETER(channels);
-	UNUSED_PARAMETER(sample_rate);
-	return false;
-}
-
-static void spine_source_enum_children(void *data, obs_source_enum_proc_t callback, void *param)
-{
-	struct spine_source *context = data;
-	if (!context)
-		return;
-	obs_source_t *browser = get_browser_ref(context);
-	if (browser) {
-		callback(context->source, browser, param);
-		obs_source_release(browser);
-	}
 }
 
 static void spine_source_defaults(obs_data_t *settings)
 {
 	static const bool default_loops[EMOTION_COUNT] = {true, true, true, true, false, false, false, true};
-	obs_data_set_default_string(settings, SETTING_RENDERER, RENDERER_BROWSER);
 	obs_data_set_default_string(settings, SETTING_NATIVE_AA, "off");
 	obs_data_set_default_string(settings, SETTING_RUNTIME, "auto");
 	obs_data_set_default_string(settings, SETTING_DEFAULT_ANIMATION, "idle");
@@ -857,15 +488,6 @@ static bool add_audio_source(void *data, obs_source_t *source)
 		const char *name = obs_source_get_name(source);
 		obs_property_list_add_string(list->property, name, name);
 	}
-	return true;
-}
-
-static bool renderer_modified(obs_properties_t *properties, obs_property_t *property, obs_data_t *settings)
-{
-	const char *renderer = obs_data_get_string(settings, SETTING_RENDERER);
-	obs_property_set_visible(obs_properties_get(properties, SETTING_NATIVE_AA),
-				 renderer && strcmp(renderer, RENDERER_NATIVE) == 0);
-	UNUSED_PARAMETER(property);
 	return true;
 }
 
@@ -990,12 +612,6 @@ static obs_properties_t *spine_source_properties(void *data)
 	obs_property_set_modified_callback(core_path, core_path_modified);
 	obs_properties_add_path(properties, SETTING_ATLAS_PATH, obs_module_text("AtlasFile"), OBS_PATH_FILE,
 				"Spine atlas (*.atlas);;All files (*.*)", NULL);
-	obs_property_t *renderer = obs_properties_add_list(properties, SETTING_RENDERER, obs_module_text("Renderer"),
-							   OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(renderer, obs_module_text("Renderer.Browser"), RENDERER_BROWSER);
-	obs_property_list_add_string(renderer, obs_module_text("Renderer.Native"), RENDERER_NATIVE);
-	obs_property_set_long_description(renderer, obs_module_text("Renderer.Help"));
-	obs_property_set_modified_callback(renderer, renderer_modified);
 	obs_property_t *antialiasing = obs_properties_add_list(properties, SETTING_NATIVE_AA,
 							       obs_module_text("NativeAntialiasing"),
 							       OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
@@ -1010,6 +626,7 @@ static obs_properties_t *spine_source_properties(void *data)
 	obs_property_list_add_string(runtime, "Spine 3.7", "3.7");
 	obs_property_list_add_string(runtime, "Spine 4.0", "4.0");
 	obs_property_list_add_string(runtime, "Spine 4.1", "4.1");
+	obs_property_set_long_description(runtime, obs_module_text("RuntimeVersion.Help"));
 	obs_properties_add_list(properties, SETTING_DEFAULT_ANIMATION, obs_module_text("DefaultAnimation"),
 				OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
 	obs_properties_add_int(properties, SETTING_WIDTH, obs_module_text("CanvasWidth"), 64, 7680, 1);
@@ -1079,7 +696,7 @@ static obs_properties_t *spine_source_properties(void *data)
 struct obs_source_info spine_source_info = {
 	.id = "obs_spine_player_source",
 	.type = OBS_SOURCE_TYPE_INPUT,
-	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_COMPOSITE | OBS_SOURCE_SRGB,
+	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_SRGB,
 	.get_name = spine_source_get_name,
 	.create = spine_source_create,
 	.destroy = spine_source_destroy,
@@ -1088,9 +705,7 @@ struct obs_source_info spine_source_info = {
 	.get_height = spine_source_get_height,
 	.video_tick = spine_source_tick,
 	.video_render = spine_source_render,
-	.audio_render = spine_source_audio_render,
-	.enum_active_sources = spine_source_enum_children,
 	.get_defaults = spine_source_defaults,
 	.get_properties = spine_source_properties,
-	.icon_type = OBS_ICON_TYPE_BROWSER,
+	.icon_type = OBS_ICON_TYPE_IMAGE,
 };

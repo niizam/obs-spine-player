@@ -5,7 +5,7 @@
 #include "skeleton-version.h"
 #include "spine-backend.h"
 
-/* NULL for families no backend can draw (the browser renderer takes over). */
+/* NULL for families no backend can draw. */
 const struct spine_backend *spine_backend_for_family(enum spine_family family);
 
 /* Routes the runtimes' allocations to a host allocator (OBS's bmalloc), except spine-c 3.7,

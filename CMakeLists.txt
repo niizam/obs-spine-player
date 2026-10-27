@@ -24,8 +24,6 @@ target_sources(
     src/plugin-main.c
     src/animation-catalog.c
     src/animation-catalog.h
-    src/browser-bridge.c
-    src/browser-bridge.h
     src/cursor-input.c
     src/cursor-input.h
     src/level-gate.c

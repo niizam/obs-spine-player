@@ -1,6 +1,6 @@
 #pragma once
 
-/* Draws a Spine skeleton through libobs graphics, without a browser source.
+/* Draws a Spine skeleton through libobs graphics.
  * Loading runs on a per-renderer background thread; everything touching GPU
  * resources or the animated skeleton runs on the OBS graphics thread
  * (video_tick / video_render). */
@@ -15,12 +15,12 @@ enum native_renderer_state {
 	NATIVE_LOADING,
 	NATIVE_READY,
 	NATIVE_FAILED,
-	NATIVE_NEEDS_BROWSER,
+	NATIVE_UNSUPPORTED, /* a Spine version no backend draws */
 };
 
 struct native_renderer;
 
-/* Character controls, mirroring what the browser player receives. */
+/* Character controls from the source settings. */
 struct native_controls {
 	bool state_enabled;
 	bool yap_enabled;

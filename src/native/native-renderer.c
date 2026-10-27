@@ -158,7 +158,7 @@ static void join_names(char *out, size_t size, char **names, size_t count, const
 		snprintf(out, size, "%s", empty);
 }
 
-/* Same messages as the browser player's logYapPlan. */
+/* Explains the yap-mode decision in the OBS log. */
 static void log_yap_plan(const struct native_renderer *renderer, const struct mouth_plan *plan)
 {
 	const struct spine_skeleton_desc *desc = renderer->backend->describe(renderer->asset);
@@ -371,8 +371,8 @@ static struct load_result *load_asset(struct native_renderer *renderer, const ch
 	enum spine_family family = skeleton_version_detect((const uint8_t *)bytes, size, is_json_path(skeleton),
 							    result->version, sizeof(result->version));
 	free(bytes);
-	/* The runtime override exists because the browser cannot always probe local files; the native
-	 * loader reads the file itself, so a detected version wins over a mismatched override. */
+	/* The runtime setting is only an override for files whose version cannot be detected;
+	 * a detected version wins over a mismatched setting. */
 	if (forced != SPINE_FAMILY_UNKNOWN && family != SPINE_FAMILY_UNKNOWN && forced != family)
 		native_log(renderer, LOG_WARNING,
 			   "the Spine runtime setting does not match the skeleton (Spine %s); using the detected version",
@@ -383,7 +383,9 @@ static struct load_result *load_asset(struct native_renderer *renderer, const ch
 		snprintf(result->version, sizeof(result->version), "unknown");
 	result->backend = spine_backend_for_family(family);
 	if (!result->backend) {
-		result->state = NATIVE_NEEDS_BROWSER;
+		native_log(renderer, LOG_ERROR, "Spine %s is not supported; the plugin draws Spine 3.7, 4.0 and 4.1 exports",
+			   result->version);
+		result->state = NATIVE_UNSUPPORTED;
 		return result;
 	}
 
@@ -859,7 +861,7 @@ static bool draw_skeleton(struct native_renderer *renderer, uint32_t width, uint
 	if (!gs_texrender_begin(renderer->texrender, width, height))
 		return false;
 
-	/* Blend on gamma-encoded values, like WebGL in the browser renderer. */
+	/* Blend on gamma-encoded values, like the WebGL web player. */
 	const bool previous_srgb = gs_framebuffer_srgb_enabled();
 	gs_enable_framebuffer_srgb(false);
 	struct vec4 clear;
@@ -914,7 +916,7 @@ static gs_effect_t *fxaa_effect(struct native_renderer *renderer)
 	return renderer->fxaa_effect;
 }
 
-/* Same compositing as obs-browser (sRGB decode, premultiplied ONE / INVSRCALPHA),
+/* Composites the premultiplied texture with sRGB decode and ONE / INVSRCALPHA (as obs-browser does),
  * through FXAA or an area downscale when anti-aliasing asks for it. */
 static void composite(struct native_renderer *renderer, uint32_t width, uint32_t height)
 {
