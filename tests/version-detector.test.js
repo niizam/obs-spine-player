@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const detector = require('../data/player/version-detector.js');
+const detector = require('../tools/spine-ts/version-detector.js');
 
 test('reads a Spine version from the binary header', () => {
   const version = Buffer.from('4.1.20');

@@ -37,6 +37,10 @@ VersionInfoDescription=OBS Spine Player installer
 VersionInfoProductName=OBS Spine Player
 VersionInfoProductVersion={#AppVersion}
 
+[InstallDelete]
+; Browser player page shipped by versions before the native-only renderer.
+Type: filesandordirs; Name: "{app}\data\obs-plugins\obs-spine-player\player"
+
 [Files]
 Source: "{#SourceDir}\obs-plugins\64bit\obs-spine-player.dll"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion
 Source: "{#SourceDir}\data\obs-plugins\obs-spine-player\*"; DestDir: "{app}\data\obs-plugins\obs-spine-player"; Flags: ignoreversion recursesubdirs createallsubdirs

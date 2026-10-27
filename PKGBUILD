@@ -2,11 +2,11 @@ _pkgname=obs-spine-player
 pkgname=obs-spine-player-git
 pkgver=0.2.0.r0.g0000000
 pkgrel=1
-pkgdesc='Spine 4.0/4.1 character source for OBS Studio (git version)'
+pkgdesc='Spine 3.7/4.0/4.1 character source for OBS Studio (git version)'
 arch=('x86_64')
 url='https://github.com/niizam/obs-spine-player'
 license=('custom')
-depends=('obs-studio' 'obs-studio-plugin-browser')
+depends=('obs-studio')
 makedepends=('cmake' 'git' 'ninja')
 provides=('obs-spine-player')
 conflicts=('obs-spine-player')
@@ -43,7 +43,7 @@ check() {
 package() {
   DESTDIR="${pkgdir}" cmake --install build
 
-  install -Dm644 "${_pkgname}/data/player/runtime/SPINE-RUNTIMES-LICENSE.txt" \
+  install -Dm644 "${_pkgname}/third_party/spine-c-4.1/LICENSE" \
     "${pkgdir}/usr/share/licenses/${pkgname}/SPINE-RUNTIMES-LICENSE.txt"
   install -Dm644 "${_pkgname}/THIRD_PARTY_NOTICES.md" \
     "${pkgdir}/usr/share/licenses/${pkgname}/THIRD_PARTY_NOTICES.md"

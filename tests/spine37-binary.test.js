@@ -7,7 +7,7 @@ const vm = require('node:vm');
 /* Arrays from the vm realm have another Array prototype; compare plain values. */
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-const playerDirectory = path.join(__dirname, '..', 'data', 'player');
+const playerDirectory = path.join(__dirname, '..', 'tools', 'spine-ts');
 
 function runtime() {
   const context = vm.createContext({ console, Math, Float32Array, Uint8Array, Int16Array, DataView, ArrayBuffer, Map, JSON });

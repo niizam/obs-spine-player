@@ -100,13 +100,18 @@ install(
   RUNTIME DESTINATION "${OBS_PLUGIN_BINARY_DESTINATION}"
 )
 install(DIRECTORY data/ DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}")
+foreach(spine_version 3.7 4.0 4.1)
+  install(FILES "third_party/spine-c-${spine_version}/LICENSE"
+          DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}/licenses"
+          RENAME "spine-c-${spine_version}.txt")
+endforeach()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/characters")
   install(DIRECTORY characters/ DESTINATION "${OBS_PLUGIN_DATA_DESTINATION}/characters")
 endif()
 
 if(NODE_EXECUTABLE)
   file(GLOB PLAYER_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.test.js")
-  add_test(NAME player-state-tests COMMAND "${NODE_EXECUTABLE}" --test ${PLAYER_TEST_FILES})
+  add_test(NAME tools-js-tests COMMAND "${NODE_EXECUTABLE}" --test ${PLAYER_TEST_FILES})
 endif()
 
 add_executable(atlas-image-tests tests/atlas-image-test.c src/native/atlas-image.c)

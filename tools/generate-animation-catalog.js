@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const versionDetector = require('../data/player/version-detector.js');
+const versionDetector = require('./spine-ts/version-detector.js');
 
 function usage() {
   console.error('Usage: node tools/generate-animation-catalog.js <skeleton.skel|json> [atlas.atlas] [output.txt]');
@@ -36,7 +36,7 @@ function runtimeContext() {
   });
 }
 
-const playerDirectory = path.join(__dirname, '..', 'data', 'player');
+const playerDirectory = path.join(__dirname, 'spine-ts');
 
 /* The same files the OBS renderer loads for each family; Spine 3.7 adds the local binary reader. */
 const runtimeScripts = {

@@ -12,9 +12,9 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const RUNTIMES = {
-  '4.1': { file: 'data/player/runtime/4.1.20/spine-player.min.js', label: '4.1.20 web player' },
-  '4.0': { file: 'data/player/runtime/4.0.28/spine-player.min.js', label: '4.0.28 web player' },
-  '3.7': { file: 'data/player/runtime/3.7.94/spine-webgl.js', label: '3.7.94 spine-webgl + spine37-binary.js' }
+  '4.1': { file: 'tools/spine-ts/runtime/4.1.20/spine-player.min.js', label: '4.1.20 web player' },
+  '4.0': { file: 'tools/spine-ts/runtime/4.0.28/spine-player.min.js', label: '4.0.28 web player' },
+  '3.7': { file: 'tools/spine-ts/runtime/3.7.94/spine-webgl.js', label: '3.7.94 spine-webgl + spine37-binary.js' }
 };
 
 function loadSpine(version) {
@@ -29,7 +29,7 @@ function loadSpine(version) {
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(root, RUNTIMES[version].file), 'utf8') + '\n;globalThis.spine = spine;', context);
   /* The browser reads 3.7 .skel files through the repo's port of the 3.7 binary reader. */
-  if (version === '3.7') vm.runInContext(fs.readFileSync(path.join(root, 'data/player/spine37-binary.js'), 'utf8'), context);
+  if (version === '3.7') vm.runInContext(fs.readFileSync(path.join(root, 'tools/spine-ts/spine37-binary.js'), 'utf8'), context);
   return context.spine;
 }
 
@@ -50,7 +50,7 @@ function direction(spine) {
   return spine.MixDirection.mixIn !== undefined ? spine.MixDirection.mixIn : spine.MixDirection.in;
 }
 
-/* SpinePlayer.calculateAnimationViewport (4.x) or spine37-player.js animationBounds (3.7), before padding. */
+/* SpinePlayer.calculateAnimationViewport (4.x) or the former 3.7 web player's animationBounds (3.7), before padding. */
 function animationBounds(spine, version, data, name) {
   const skeleton = new spine.Skeleton(data);
   const animation = data.findAnimation(name);
