@@ -79,6 +79,8 @@ struct spine_backend {
 	const char *name;
 	/* Routes the runtime's allocations; NULL keeps the C library allocator. */
 	void (*set_allocator)(const struct spine_allocator *allocator);
+	/* Frees runtime-wide caches. Call at module unload, after every asset and instance is freed. */
+	void (*shutdown)(void);
 	struct spine_asset *(*load)(const char *skeleton_path, const char *atlas_path,
 				    const struct spine_image_decoder *decoder, char *error, size_t error_size);
 	void (*free_asset)(struct spine_asset *asset);

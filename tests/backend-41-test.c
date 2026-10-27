@@ -533,6 +533,53 @@ static void test_no_zero_size_allocations(void)
 	backend->set_allocator(NULL);
 }
 
+/* Counts outstanding allocations the way OBS's leak counter does. */
+static long outstanding_allocations = 0;
+
+static void *counting_alloc(size_t size)
+{
+	outstanding_allocations++;
+	return malloc(size);
+}
+
+static void *counting_realloc(void *pointer, size_t size)
+{
+	if (!pointer)
+		outstanding_allocations++;
+	return realloc(pointer, size);
+}
+
+static void counting_free(void *pointer)
+{
+	if (pointer)
+		outstanding_allocations--;
+	free(pointer);
+}
+
+static void test_no_leaks_after_shutdown(void)
+{
+	CHECK(backend->shutdown != NULL);
+	if (!backend->shutdown)
+		return;
+	static const struct spine_allocator counting = {counting_alloc, counting_realloc, counting_free};
+	backend->set_allocator(&counting);
+	outstanding_allocations = 0;
+	struct spine_asset *asset = load_spineboy();
+	CHECK(asset != NULL);
+	if (asset) {
+		struct spine_instance *instance = backend->create_instance(asset);
+		backend->set_animation(instance, 0, "walk", true);
+		backend->update(instance, 0.25f);
+		backend->free_instance(instance);
+		backend->free_asset(asset);
+	}
+	backend->shutdown();
+	CHECK(outstanding_allocations == 0);
+	if (outstanding_allocations)
+		fprintf(stderr, "%ld runtime allocation(s) outstanding after shutdown\n", outstanding_allocations);
+	backend->set_allocator(NULL);
+}
+
 int main(void)
 {
 	backend = spine_backend_41();
@@ -542,6 +589,8 @@ int main(void)
 	CHECK(strcmp(backend->name, "4.1") == 0);
 	backend->set_allocator(NULL);
 
+	/* First, so spine-c's lazily created statics are allocated under the counting allocator. */
+	test_no_leaks_after_shutdown();
 	test_loads_skel();
 	test_loads_json();
 	test_animation_names();

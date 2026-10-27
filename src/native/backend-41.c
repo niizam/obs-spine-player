@@ -129,6 +129,12 @@ static void set_allocator(const struct spine_allocator *allocator)
 	_spSetFree(host_free);
 }
 
+/* spine-c lazily creates a shared empty animation for AnimationState. */
+static void shutdown_runtime(void)
+{
+	spAnimationState_disposeStatics();
+}
+
 /* ---- loading ---- */
 
 static void free_asset(struct spine_asset *asset)
@@ -657,6 +663,7 @@ static bool build_draw_list(struct spine_instance *instance, struct spine_draw_l
 static const struct spine_backend backend = {
 	.name = "4.1",
 	.set_allocator = set_allocator,
+	.shutdown = shutdown_runtime,
 	.load = load,
 	.free_asset = free_asset,
 	.page_count = page_count,
