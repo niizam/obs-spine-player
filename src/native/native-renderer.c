@@ -299,11 +299,22 @@ static char *obs_read_file(void *param, const char *path, size_t *size)
 	return data;
 }
 
+/* OBS 32 removed gs_image_file_init/free in favour of the _ex variants. */
+#if LIBOBS_API_MAJOR_VER >= 32
+typedef gs_image_file_ex_t spine_image_file_t;
+#define spine_image_file_init(image, path) gs_image_file_ex_init(image, path, GS_IMAGE_ALPHA_STRAIGHT)
+#define spine_image_file_free(image) gs_image_file_ex_free(image)
+#else
+typedef gs_image_file_t spine_image_file_t;
+#define spine_image_file_init(image, path) gs_image_file_init(image, path)
+#define spine_image_file_free(image) gs_image_file_free(image)
+#endif
+
 static bool obs_decode(void *param, const char *path, struct spine_decoded_image *out)
 {
 	(void)param;
-	gs_image_file_t image;
-	gs_image_file_init(&image, path);
+	spine_image_file_t image;
+	spine_image_file_init(&image, path);
 	bool ok = image.loaded && !image.is_animated_gif && image.texture_data && image.cx && image.cy;
 	if (ok) {
 		switch (image.format) {
@@ -325,7 +336,7 @@ static bool obs_decode(void *param, const char *path, struct spine_decoded_image
 		out->bgra = image.format != GS_RGBA;
 		image.texture_data = NULL; /* now owned by the caller, freed by obs_free_pixels */
 	}
-	gs_image_file_free(&image);
+	spine_image_file_free(&image);
 	return ok;
 }
 
